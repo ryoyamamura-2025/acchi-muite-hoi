@@ -19,6 +19,7 @@ import {
 } from '../data/installation';
 import { SimilarityCacheRepository } from '../data/similarityCache';
 import {
+  DEFAULT_CLASSIFIER_CONFIG,
   FaceClassifier,
   PointerClassifier,
   type DomainClassifier,
@@ -32,14 +33,8 @@ import {
   type SampleSelectorConfig,
 } from '../ml/sampleSelector';
 import type { ActiveIndex, InstallationId } from '../ml/types';
-import {
-  exportLocalDataset,
-  type DatasetExport,
-} from '../sharing/exportDataset';
-import {
-  importDatasetArchive,
-  type ImportDatasetResult,
-} from '../sharing/importDataset';
+import { exportLocalDataset, type DatasetExport } from '../sharing/exportDataset';
+import { importDatasetArchive, type ImportDatasetResult } from '../sharing/importDataset';
 import {
   TrainingSession,
   type TrainingSessionConfig,
@@ -60,7 +55,6 @@ export type InferenceSource = HTMLVideoElement | HTMLCanvasElement | HTMLImageEl
 
 export interface ModelServiceDeps {
   db: DatabasePort;
-  /** Pointer/Faceの両方で共有する唯一のFeatureExtractor。 */
   extractor: FeatureExtractor;
   pointerClassifier?: DomainClassifier<PointerLabel>;
   faceClassifier?: DomainClassifier<FaceLabel>;
@@ -97,8 +91,11 @@ export class ModelService {
     this.activeRepository = new ActiveDatasetRepository(deps.db);
     this.similarityCacheRepository = new SimilarityCacheRepository(deps.db);
     this.pointerClassifier =
-      deps.pointerClassifier ?? new PointerClassifier(deps.extractor.featureDim, 5);
-    this.faceClassifier = deps.faceClassifier ?? new FaceClassifier(deps.extractor.featureDim, 5);
+      deps.pointerClassifier ??
+      new PointerClassifier(deps.extractor.featureDim, DEFAULT_CLASSIFIER_CONFIG.pointer.k);
+    this.faceClassifier =
+      deps.faceClassifier ??
+      new FaceClassifier(deps.extractor.featureDim, DEFAULT_CLASSIFIER_CONFIG.face.k);
     this.selectorConfig = deps.selectorConfig ?? DEFAULT_SAMPLE_SELECTOR_CONFIG;
     this.trainingConfig = deps.trainingConfig ?? {};
   }
