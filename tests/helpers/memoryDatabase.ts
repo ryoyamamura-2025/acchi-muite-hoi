@@ -4,6 +4,8 @@ import type {
   SampleStoreName,
 } from '../../src/data/database';
 import { STORE_NAMES } from '../../src/data/database';
+import type { AnyLabel, Domain } from '../../src/ml/labels';
+import type { SimilarityCacheEntry } from '../../src/ml/similarity';
 import type { ActiveIndex, Sample } from '../../src/ml/types';
 import { makeSampleKey } from '../../src/ml/types';
 
@@ -11,6 +13,7 @@ export class MemoryDatabase implements DatabasePort {
   private readonly meta = new Map<string, unknown>();
   private readonly local = new Map<string, Sample>();
   private readonly imported = new Map<string, Sample>();
+  private readonly similarityCache = new Map<string, SimilarityCacheEntry[]>();
   private activeIndex: ActiveIndex | undefined;
 
   async getMeta<T>(key: string): Promise<T | undefined> {
@@ -78,10 +81,27 @@ export class MemoryDatabase implements DatabasePort {
     this.activeIndex = undefined;
   }
 
+  async getSimilarityCache(domain: Domain, label: AnyLabel): Promise<SimilarityCacheEntry[]> {
+    return structuredClone(this.similarityCache.get(cacheKey(domain, label)) ?? []);
+  }
+
+  async setSimilarityCache(
+    domain: Domain,
+    label: AnyLabel,
+    entries: readonly SimilarityCacheEntry[],
+  ): Promise<void> {
+    this.similarityCache.set(cacheKey(domain, label), structuredClone([...entries]));
+  }
+
+  async clearSimilarityCache(domain: Domain, label: AnyLabel): Promise<void> {
+    this.similarityCache.delete(cacheKey(domain, label));
+  }
+
   async clearDatasetState(): Promise<void> {
     this.local.clear();
     this.imported.clear();
     this.activeIndex = undefined;
+    this.similarityCache.clear();
   }
 
   async resetAll(): Promise<void> {
@@ -92,6 +112,10 @@ export class MemoryDatabase implements DatabasePort {
   private mapFor(store: SampleStoreName): Map<string, Sample> {
     return store === STORE_NAMES.localSamples ? this.local : this.imported;
   }
+}
+
+function cacheKey(domain: Domain, label: AnyLabel): string {
+  return `${domain}:${label}`;
 }
 
 function cloneSample(sample: Sample): Sample {
