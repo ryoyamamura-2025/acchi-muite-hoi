@@ -1,5 +1,5 @@
-import type { DatabasePort } from '../data/database';
 import { isDomainLabel, type AnyLabel, type Domain } from '../ml/labels';
+import type { ValidationStore } from './validationStore';
 import type { ValidationSessionRecord } from './types';
 
 export interface ValidationModelSnapshot {
@@ -14,7 +14,7 @@ export interface ValidationPrediction {
 }
 
 export interface ValidationServiceDeps<TSource> {
-  db: DatabasePort;
+  store: ValidationStore;
   getModelSnapshot(): ValidationModelSnapshot;
   predict(domain: Domain, source: TSource): Promise<ValidationPrediction | null>;
   now?: () => number;
@@ -84,17 +84,17 @@ export class ValidationService<TSource> {
       activeDatasetRevision: before.activeDatasetRevision,
     };
     validateRecord(record);
-    await this.deps.db.putValidationSession(record);
+    await this.deps.store.put(record);
     return structuredClone(record);
   }
 
   async listTrials(): Promise<ValidationSessionRecord[]> {
-    const records = await this.deps.db.getValidationSessions();
+    const records = await this.deps.store.list();
     return records.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   async clearTrials(): Promise<void> {
-    await this.deps.db.clearValidationSessions();
+    await this.deps.store.clear();
   }
 }
 
