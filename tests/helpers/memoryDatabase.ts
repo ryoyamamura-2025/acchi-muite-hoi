@@ -33,10 +33,7 @@ export class MemoryDatabase implements DatabasePort {
     return [...source.values()].filter((sample) => {
       if (filter.domain && sample.domain !== filter.domain) return false;
       if (filter.label && sample.label !== filter.label) return false;
-      if (
-        filter.sourceInstallationId &&
-        sample.sourceInstallationId !== filter.sourceInstallationId
-      ) {
+      if (filter.sourceInstallationId && sample.sourceInstallationId !== filter.sourceInstallationId) {
         return false;
       }
       return true;
@@ -57,6 +54,7 @@ export class MemoryDatabase implements DatabasePort {
   async replaceImportedSource(
     sourceInstallationId: string,
     samples: readonly Sample[],
+    nextDataRevision?: number,
   ): Promise<void> {
     const next = new Map(this.imported);
     for (const [key, sample] of next) {
@@ -67,6 +65,7 @@ export class MemoryDatabase implements DatabasePort {
     }
     this.imported.clear();
     for (const [key, sample] of next) this.imported.set(key, sample);
+    if (nextDataRevision !== undefined) this.meta.set('dataRevision', nextDataRevision);
   }
 
   async commitLocalClassSelection(

@@ -33,7 +33,12 @@ export interface DatabasePort {
   getSamples(store: SampleStoreName, filter?: SampleFilter): Promise<Sample[]>;
   putSamples(store: SampleStoreName, samples: readonly Sample[]): Promise<void>;
   clearSampleStore(store: SampleStoreName): Promise<void>;
-  replaceImportedSource(sourceInstallationId: string, samples: readonly Sample[]): Promise<void>;
+  /** nextDataRevision指定時はImported置換とrevision更新を同一transactionで確定する。 */
+  replaceImportedSource(
+    sourceInstallationId: string,
+    samples: readonly Sample[],
+    nextDataRevision?: number,
+  ): Promise<void>;
   /** Localの1 classと対応するsimilarity cacheを同一transactionで置換する。 */
   commitLocalClassSelection(
     domain: Domain,
@@ -63,6 +68,7 @@ export interface DatabasePort {
 const INDEX_DOMAIN_LABEL = 'domainLabel';
 const INDEX_SOURCE_INSTALLATION = 'sourceInstallationId';
 const ACTIVE_INDEX_KEY = 'current';
+const DATA_REVISION_KEY = 'dataRevision';
 const LEGACY_STORE = 'datasets';
 
 export function createIndexedDbDatabase(): DatabasePort {
@@ -114,16 +120,10 @@ class IndexedDbDatabase implements DatabasePort {
       let samples = await requestToPromise(request);
       await done;
 
-      if (filter.domain && !filter.label) {
-        samples = samples.filter((sample) => sample.domain === filter.domain);
-      }
-      if (filter.label && !filter.domain) {
-        samples = samples.filter((sample) => sample.label === filter.label);
-      }
+      if (filter.domain && !filter.label) samples = samples.filter((sample) => sample.domain === filter.domain);
+      if (filter.label && !filter.domain) samples = samples.filter((sample) => sample.label === filter.label);
       if (filter.sourceInstallationId && filter.domain && filter.label) {
-        samples = samples.filter(
-          (sample) => sample.sourceInstallationId === filter.sourceInstallationId,
-        );
+        samples = samples.filter((sample) => sample.sourceInstallationId === filter.sourceInstallationId);
       }
       return samples;
     });
@@ -150,9 +150,18 @@ class IndexedDbDatabase implements DatabasePort {
   async replaceImportedSource(
     sourceInstallationId: string,
     samples: readonly Sample[],
+    nextDataRevision?: number,
   ): Promise<void> {
+    if (nextDataRevision !== undefined && (!Number.isInteger(nextDataRevision) || nextDataRevision < 0)) {
+      throw new Error('nextDataRevision must be a non-negative integer');
+    }
+
     await this.withDatabase(async (db) => {
-      const tx = db.transaction(STORE_NAMES.importedSamples, 'readwrite');
+      const stores =
+        nextDataRevision === undefined
+          ? [STORE_NAMES.importedSamples]
+          : [STORE_NAMES.importedSamples, STORE_NAMES.meta];
+      const tx = db.transaction(stores, 'readwrite');
       const store = tx.objectStore(STORE_NAMES.importedSamples);
       const index = store.index(INDEX_SOURCE_INSTALLATION);
       const cursorRequest = index.openKeyCursor(IDBKeyRange.only(sourceInstallationId));
@@ -165,6 +174,9 @@ class IndexedDbDatabase implements DatabasePort {
           return;
         }
         for (const sample of samples) store.put(sample);
+        if (nextDataRevision !== undefined) {
+          tx.objectStore(STORE_NAMES.meta).put(nextDataRevision, DATA_REVISION_KEY);
+        }
       };
 
       await transactionDone(tx);
@@ -178,10 +190,7 @@ class IndexedDbDatabase implements DatabasePort {
     cacheEntries: readonly SimilarityCacheEntry[],
   ): Promise<void> {
     await this.withDatabase(async (db) => {
-      const tx = db.transaction(
-        [STORE_NAMES.localSamples, STORE_NAMES.similarityCache],
-        'readwrite',
-      );
+      const tx = db.transaction([STORE_NAMES.localSamples, STORE_NAMES.similarityCache], 'readwrite');
       const sampleStore = tx.objectStore(STORE_NAMES.localSamples);
       const cacheStore = tx.objectStore(STORE_NAMES.similarityCache);
       const cursorRequest = sampleStore
@@ -251,10 +260,7 @@ class IndexedDbDatabase implements DatabasePort {
   ): Promise<void> {
     await this.withDatabase(async (db) => {
       const tx = db.transaction(STORE_NAMES.similarityCache, 'readwrite');
-      tx.objectStore(STORE_NAMES.similarityCache).put(
-        [...entries],
-        similarityCacheKey(domain, label),
-      );
+      tx.objectStore(STORE_NAMES.similarityCache).put([...entries], similarityCacheKey(domain, label));
       await transactionDone(tx);
     });
   }
@@ -313,17 +319,11 @@ function openDatabase(): Promise<IDBDatabase> {
       const db = request.result;
       if (db.objectStoreNames.contains(LEGACY_STORE)) db.deleteObjectStore(LEGACY_STORE);
 
-      if (!db.objectStoreNames.contains(STORE_NAMES.meta)) {
-        db.createObjectStore(STORE_NAMES.meta);
-      }
+      if (!db.objectStoreNames.contains(STORE_NAMES.meta)) db.createObjectStore(STORE_NAMES.meta);
       createSampleStoreIfMissing(db, STORE_NAMES.localSamples);
       createSampleStoreIfMissing(db, STORE_NAMES.importedSamples);
-      if (!db.objectStoreNames.contains(STORE_NAMES.activeIndex)) {
-        db.createObjectStore(STORE_NAMES.activeIndex);
-      }
-      if (!db.objectStoreNames.contains(STORE_NAMES.similarityCache)) {
-        db.createObjectStore(STORE_NAMES.similarityCache);
-      }
+      if (!db.objectStoreNames.contains(STORE_NAMES.activeIndex)) db.createObjectStore(STORE_NAMES.activeIndex);
+      if (!db.objectStoreNames.contains(STORE_NAMES.similarityCache)) db.createObjectStore(STORE_NAMES.similarityCache);
       if (!db.objectStoreNames.contains(STORE_NAMES.validationSessions)) {
         db.createObjectStore(STORE_NAMES.validationSessions, { keyPath: 'validationSessionId' });
       }

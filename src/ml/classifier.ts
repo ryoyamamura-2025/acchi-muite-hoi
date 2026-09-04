@@ -129,7 +129,10 @@ class KnnDomainClassifier<L extends string> implements DomainClassifier<L> {
   }
 
   total(): number {
-    return Object.values(this.counts()).reduce((sum, count) => sum + count, 0);
+    const counts = this.counts();
+    let total = 0;
+    for (const label of this.labels) total += counts[label];
+    return total;
   }
 
   dispose(): void {

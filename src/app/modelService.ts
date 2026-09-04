@@ -33,6 +33,14 @@ import {
 } from '../ml/sampleSelector';
 import type { ActiveIndex, InstallationId } from '../ml/types';
 import {
+  exportLocalDataset,
+  type DatasetExport,
+} from '../sharing/exportDataset';
+import {
+  importDatasetArchive,
+  type ImportDatasetResult,
+} from '../sharing/importDataset';
+import {
   TrainingSession,
   type TrainingSessionConfig,
   type TrainingSessionResult,
@@ -82,6 +90,7 @@ export class ModelService {
   };
   private trainingSession: TrainingSession | null = null;
   private trainingStatus: TrainingStatus = idleTrainingStatus();
+  private datasetMutationInProgress = false;
 
   constructor(private readonly deps: ModelServiceDeps) {
     this.datasetRepository = new DatasetRepository(deps.db);
@@ -171,6 +180,7 @@ export class ModelService {
 
   async setSharedDataEnabled(enabled: boolean): Promise<void> {
     this.requireInitialized();
+    this.requireNoDatasetMutation();
     if (this.trainingSession) throw new Error('学習session中はShared設定を変更できません');
     if (enabled === this.sharedDataEnabled && this.status.state === 'ready') return;
 
@@ -212,6 +222,7 @@ export class ModelService {
     sourceProvider: () => InferenceSource,
   ): Promise<TrainingSessionResult> {
     this.requireInitialized();
+    this.requireNoDatasetMutation();
     if (this.status.state !== 'ready') throw new Error('Classifier再構築中は学習を開始できません');
     if (this.trainingSession) throw new Error('Training session is already running');
     if (!this.installationId) throw new Error('installationId is not initialized');
@@ -255,8 +266,58 @@ export class ModelService {
     return this.trainingSession?.cancel() ?? false;
   }
 
+  async exportLocalDataset(): Promise<DatasetExport> {
+    this.requireInitialized();
+    this.requireNoDatasetMutation();
+    if (this.trainingSession) throw new Error('学習session中はDatasetをExportできません');
+    if (!this.installationId) throw new Error('installationId is not initialized');
+
+    return exportLocalDataset({
+      datasetRepository: this.datasetRepository,
+      installationId: this.installationId,
+      datasetVersion: DATASET_VERSION,
+      extractorName: this.deps.extractor.name,
+      featureDim: this.deps.extractor.featureDim,
+    });
+  }
+
+  async importDataset(bytes: Uint8Array | ArrayBuffer): Promise<ImportDatasetResult> {
+    this.requireInitialized();
+    if (this.status.state !== 'ready') throw new Error('Classifier再構築中はDatasetをImportできません');
+    if (this.trainingSession) throw new Error('学習session中はDatasetをImportできません');
+    this.requireNoDatasetMutation();
+    this.datasetMutationInProgress = true;
+
+    try {
+      const archiveBytes =
+        bytes instanceof Uint8Array ? new Uint8Array(bytes) : new Uint8Array(bytes.slice(0));
+      const result = await importDatasetArchive({
+        bytes: archiveBytes,
+        datasetRepository: this.datasetRepository,
+        compatibility: {
+          datasetVersion: DATASET_VERSION,
+          extractorName: this.deps.extractor.name,
+          featureDim: this.deps.extractor.featureDim,
+        },
+        currentDataRevision: await getDataRevision(this.deps.db),
+      });
+
+      if (result.kind === 'success') {
+        try {
+          await this.rebuildActiveAndClassifiers(result.dataRevision);
+        } catch (error) {
+          this.fail(error);
+        }
+      }
+      return result;
+    } finally {
+      this.datasetMutationInProgress = false;
+    }
+  }
+
   async refreshFromDatasets(): Promise<void> {
     this.requireInitialized();
+    this.requireNoDatasetMutation();
     if (this.trainingSession) throw new Error('学習session中はDatasetを再構築できません');
     try {
       await this.rebuildActiveAndClassifiers(await getDataRevision(this.deps.db));
@@ -317,6 +378,10 @@ export class ModelService {
 
   private requireInitialized(): void {
     if (!this.installationId) throw new Error('ModelService is not initialized');
+  }
+
+  private requireNoDatasetMutation(): void {
+    if (this.datasetMutationInProgress) throw new Error('Dataset operation is already running');
   }
 
   private requireInferenceReady(): void {
