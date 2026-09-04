@@ -1,4 +1,5 @@
 import type { AnyLabel, Domain } from '../ml/labels';
+import type { SimilarityCacheEntry } from '../ml/similarity';
 import type { ActiveIndex, Sample } from '../ml/types';
 
 export const DB_NAME = 'acchi-muite-hoi';
@@ -37,6 +38,14 @@ export interface DatabasePort {
   getActiveIndex(): Promise<ActiveIndex | undefined>;
   setActiveIndex(index: ActiveIndex): Promise<void>;
   clearActiveIndex(): Promise<void>;
+
+  getSimilarityCache(domain: Domain, label: AnyLabel): Promise<SimilarityCacheEntry[]>;
+  setSimilarityCache(
+    domain: Domain,
+    label: AnyLabel,
+    entries: readonly SimilarityCacheEntry[],
+  ): Promise<void>;
+  clearSimilarityCache(domain: Domain, label: AnyLabel): Promise<void>;
 
   /** Dataset互換性喪失時に消す派生/学習データ。meta（installationId/settings）は維持する。 */
   clearDatasetState(): Promise<void>;
@@ -183,6 +192,41 @@ class IndexedDbDatabase implements DatabasePort {
     });
   }
 
+  async getSimilarityCache(domain: Domain, label: AnyLabel): Promise<SimilarityCacheEntry[]> {
+    return this.withDatabase(async (db) => {
+      const tx = db.transaction(STORE_NAMES.similarityCache, 'readonly');
+      const done = transactionDone(tx);
+      const entries = await requestToPromise<SimilarityCacheEntry[] | undefined>(
+        tx.objectStore(STORE_NAMES.similarityCache).get(similarityCacheKey(domain, label)),
+      );
+      await done;
+      return entries ?? [];
+    });
+  }
+
+  async setSimilarityCache(
+    domain: Domain,
+    label: AnyLabel,
+    entries: readonly SimilarityCacheEntry[],
+  ): Promise<void> {
+    await this.withDatabase(async (db) => {
+      const tx = db.transaction(STORE_NAMES.similarityCache, 'readwrite');
+      tx.objectStore(STORE_NAMES.similarityCache).put(
+        [...entries],
+        similarityCacheKey(domain, label),
+      );
+      await transactionDone(tx);
+    });
+  }
+
+  async clearSimilarityCache(domain: Domain, label: AnyLabel): Promise<void> {
+    await this.withDatabase(async (db) => {
+      const tx = db.transaction(STORE_NAMES.similarityCache, 'readwrite');
+      tx.objectStore(STORE_NAMES.similarityCache).delete(similarityCacheKey(domain, label));
+      await transactionDone(tx);
+    });
+  }
+
   async clearDatasetState(): Promise<void> {
     const stores = [
       STORE_NAMES.localSamples,
@@ -215,6 +259,10 @@ class IndexedDbDatabase implements DatabasePort {
       db.close();
     }
   }
+}
+
+function similarityCacheKey(domain: Domain, label: AnyLabel): string {
+  return `${domain}:${label}`;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
