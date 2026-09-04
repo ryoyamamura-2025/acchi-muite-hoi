@@ -1,130 +1,177 @@
 import { describe, expect, it } from 'vitest';
-import { Game, GameDeps, GameState, Hand, TARGET_SCORE } from '../src/game/stateMachine';
-import { JudgeSample } from '../src/game/judge';
-import { ClassLabel, Direction, emptyConfidences } from '../src/ml/labels';
+import {
+  MatchGame,
+  type MatchGameDeps,
+  type MatchGameState,
+} from '../src/game/stateMachine';
+import type { JudgeSample } from '../src/game/judge';
+import type { AnyLabel, Direction, Domain } from '../src/ml/labels';
 
-function samples(label: ClassLabel, count = 5): JudgeSample[] {
-  const confidences = emptyConfidences();
-  confidences[label] = 1;
-  return Array.from({ length: count }, () => ({ label, confidences }));
+function samples(label: AnyLabel, count = 5, confidence = 1): JudgeSample[] {
+  return Array.from({ length: count }, () => ({
+    label,
+    confidences: { [label]: confidence },
+  }));
 }
 
-/**
- * 決め打ちの手・方向を順番に返すテスト用の依存。
- * `sleep` は即解決させるので進行が最後まで走り切る。
- */
 function harness(options: {
-  playerDirections: (ClassLabel | 'none')[];
+  playerLabels: AnyLabel[];
   cpuDirections: Direction[];
-  cpuHands: Hand[];
 }) {
-  const states: GameState[] = [];
-  let directionIndex = 0;
+  const states: MatchGameState[] = [];
+  const calls: string[] = [];
+  let playerIndex = 0;
   let cpuIndex = 0;
-  let handIndex = 0;
 
-  const deps: GameDeps = {
-    collect: async () => {
-      const next = options.playerDirections[directionIndex++] ?? 'none';
-      return next === 'none' ? [] : samples(next);
+  const deps: MatchGameDeps = {
+    collect: async (domain: Domain, durationMs: number) => {
+      calls.push(`collect:${domain}:${durationMs}`);
+      const next = options.playerLabels[playerIndex++] ?? 'neutral';
+      return samples(next);
     },
     sleep: async () => {},
-    randomDirection: () => options.cpuDirections[cpuIndex++ % options.cpuDirections.length],
-    randomHand: () => options.cpuHands[handIndex++ % options.cpuHands.length],
+    randomDirection: () => {
+      calls.push('randomDirection');
+      return options.cpuDirections[cpuIndex++ % options.cpuDirections.length];
+    },
   };
 
-  const game = new Game(deps, (state) => states.push(state));
-  return { game, states, last: () => states[states.length - 1] };
+  const game = new MatchGame(deps, (state) => states.push(state), {
+    timing: {
+      preparingMs: 0,
+      attackReadyMs: 0,
+      chantMs: 0,
+      captureMs: 500,
+      resultMs: 0,
+    },
+  });
+  return { game, states, calls, last: () => states[states.length - 1] };
 }
 
-describe('Game', () => {
-  it('じゃんけんに勝つとプレイヤーが攻めになる', async () => {
-    const h = harness({ playerDirections: ['up'], cpuDirections: ['left'], cpuHands: ['scissors'] });
-    h.game.start();
-    await h.game.playHand('rock');
-    expect(h.states.some((s) => s.attacker === 'player')).toBe(true);
-  });
+describe('Phase 6 MatchGame', () => {
+  it('player-firstの攻撃ではPointerを500ms収集し、一致すれば1点勝負が終了する', async () => {
+    const h = harness({ playerLabels: ['right'], cpuDirections: ['right'] });
 
-  it('あいこならじゃんけんに戻り攻守は決まらない', async () => {
-    const h = harness({ playerDirections: [], cpuDirections: ['up'], cpuHands: ['rock'] });
-    h.game.start();
-    await h.game.playHand('rock');
-    expect(h.last().phase).toBe('janken');
-    expect(h.last().attacker).toBeNull();
-    expect(h.last().janken?.outcome).toBe('draw');
-  });
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 1 });
 
-  it('攻めていて方向が一致すればプレイヤーの得点', async () => {
-    const h = harness({
-      playerDirections: ['right'],
-      cpuDirections: ['right'],
-      cpuHands: ['scissors'],
-    });
-    h.game.start();
-    await h.game.playHand('rock');
-    const reveal = h.states.find((s) => s.phase === 'reveal')!;
-    expect(reveal.round?.outcome).toBe('player-point');
-    expect(reveal.score.player).toBe(1);
-    expect(h.last().phase).toBe('janken');
-  });
-
-  it('攻めていて方向が違えば得点にならない', async () => {
-    const h = harness({ playerDirections: ['up'], cpuDirections: ['left'], cpuHands: ['scissors'] });
-    h.game.start();
-    await h.game.playHand('rock');
-    const reveal = h.states.find((s) => s.phase === 'reveal')!;
-    expect(reveal.round?.outcome).toBe('dodge');
-    expect(reveal.score).toEqual({ player: 0, cpu: 0 });
-  });
-
-  it('守っていて同じ方向を向くと CPU の得点', async () => {
-    const h = harness({ playerDirections: ['down'], cpuDirections: ['down'], cpuHands: ['paper'] });
-    h.game.start();
-    await h.game.playHand('rock');
-    const reveal = h.states.find((s) => s.phase === 'reveal')!;
-    expect(reveal.attacker).toBe('cpu');
-    expect(reveal.round?.outcome).toBe('cpu-point');
-    expect(reveal.score.cpu).toBe(1);
-  });
-
-  it('判定できなかった場合は攻守を変えずにやり直す', async () => {
-    const h = harness({
-      playerDirections: ['neutral', 'right'],
-      cpuDirections: ['right'],
-      cpuHands: ['scissors'],
-    });
-    h.game.start();
-    await h.game.playHand('rock');
-    const undecided = h.states.find((s) => s.round?.outcome === 'undecided')!;
-    expect(undecided.attacker).toBe('player');
-    expect(h.last().score.player).toBe(1);
-  });
-
-  it('判定できないラウンドが続いてもじゃんけんに戻る（無限ループしない）', async () => {
-    const h = harness({ playerDirections: [], cpuDirections: ['up'], cpuHands: ['scissors'] });
-    h.game.start();
-    await h.game.playHand('rock');
-    expect(h.last().phase).toBe('janken');
-    expect(h.last().attacker).toBeNull();
-    expect(h.last().score).toEqual({ player: 0, cpu: 0 });
-  });
-
-  it('先に TARGET_SCORE 点取ると試合終了', async () => {
-    const h = harness({
-      playerDirections: Array.from({ length: TARGET_SCORE }, () => 'right' as ClassLabel),
-      cpuDirections: ['right'],
-      cpuHands: ['scissors'],
-    });
-    h.game.start();
-    for (let i = 0; i < TARGET_SCORE; i++) await h.game.playHand('rock');
+    expect(h.calls).toContain('collect:pointer:500');
     expect(h.last().phase).toBe('match-over');
     expect(h.last().winner).toBe('player');
-    expect(h.last().score.player).toBe(TARGET_SCORE);
+    expect(h.last().score).toEqual({ player: 1, cpu: 0 });
   });
 
-  it('ゲーム開始前はじゃんけんの手を受け付けない', async () => {
-    const h = harness({ playerDirections: [], cpuDirections: ['up'], cpuHands: ['rock'] });
-    await h.game.playHand('rock');
-    expect(h.states).toHaveLength(0);
+  it('cpu-firstの攻撃ではFaceを500ms収集し、一致すればCPUの得点になる', async () => {
+    const h = harness({ playerLabels: ['down'], cpuDirections: ['down'] });
+
+    await h.game.startMatch({ firstAttacker: 'cpu-first', targetScore: 1 });
+
+    expect(h.calls).toContain('collect:face:500');
+    expect(h.last().winner).toBe('cpu');
+    expect(h.last().score).toEqual({ player: 0, cpu: 1 });
+  });
+
+  it('方向が違えば得点せず、同じポイント内で攻守だけ交代する', async () => {
+    const h = harness({
+      playerLabels: ['up', 'down'],
+      cpuDirections: ['left', 'down'],
+    });
+
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 1 });
+
+    const miss = h.states.find((state) => state.result?.outcome === 'miss');
+    expect(miss).toMatchObject({
+      attacker: 'player',
+      pointStarter: 'player',
+      pointNumber: 1,
+      score: { player: 0, cpu: 0 },
+    });
+    const cpuAttack = h.states.find(
+      (state) => state.phase === 'cpu-attack' && state.pointNumber === 1,
+    );
+    expect(cpuAttack?.attacker).toBe('cpu');
+    expect(h.last().winner).toBe('cpu');
+  });
+
+  it('undecidedは得点・攻守・pointStarterを変えず同じ手を再試行する', async () => {
+    const h = harness({
+      playerLabels: ['neutral', 'right'],
+      cpuDirections: ['up', 'right'],
+    });
+
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 1 });
+
+    const retry = h.states.find((state) => state.phase === 'retry');
+    expect(retry).toMatchObject({
+      attacker: 'player',
+      defender: 'cpu',
+      pointStarter: 'player',
+      pointNumber: 1,
+      score: { player: 0, cpu: 0 },
+    });
+    const playerAttackStates = h.states.filter((state) => state.phase === 'player-attack');
+    expect(playerAttackStates).toHaveLength(2);
+    expect(h.last().winner).toBe('player');
+  });
+
+  it('3点先取では得点のたびに次ポイントの開始攻撃側が交互になる', async () => {
+    const h = harness({
+      playerLabels: ['up', 'up', 'up', 'up', 'up'],
+      cpuDirections: ['up'],
+    });
+
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 3 });
+
+    const pointResults = h.states.filter(
+      (state) => state.phase === 'result' && state.result?.outcome !== 'miss',
+    );
+    expect(pointResults.map((state) => state.attacker)).toEqual([
+      'player',
+      'cpu',
+      'player',
+      'cpu',
+      'player',
+    ]);
+    expect(pointResults.map((state) => state.pointStarter)).toEqual([
+      'player',
+      'cpu',
+      'player',
+      'cpu',
+      'player',
+    ]);
+    expect(h.last().score).toEqual({ player: 3, cpu: 2 });
+    expect(h.last().winner).toBe('player');
+  });
+
+  it('CPU方向はchant開始時に先に決めるが、resultまではstateへ公開しない', async () => {
+    const h = harness({ playerLabels: ['left'], cpuDirections: ['left'] });
+
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 1 });
+
+    const randomIndex = h.calls.indexOf('randomDirection');
+    const collectIndex = h.calls.indexOf('collect:pointer:500');
+    expect(randomIndex).toBeGreaterThanOrEqual(0);
+    expect(randomIndex).toBeLessThan(collectIndex);
+
+    for (const state of h.states.filter(
+      (state) => state.phase === 'chant' || state.phase === 'judging',
+    )) {
+      expect(state.cpuDirection).toBeNull();
+    }
+    const result = h.states.find((state) => state.phase === 'result');
+    expect(result?.cpuDirection).toBe('left');
+  });
+
+  it('MatchGameStateにじゃんけん状態を持たない', async () => {
+    const h = harness({ playerLabels: ['up'], cpuDirections: ['up'] });
+    await h.game.startMatch({ firstAttacker: 'player-first', targetScore: 1 });
+    expect(h.states.some((state) => 'janken' in state)).toBe(false);
+    expect(h.states.some((state) => String(state.phase).includes('janken'))).toBe(false);
+  });
+
+  it('targetScoreは1または3だけ受け付ける', async () => {
+    const h = harness({ playerLabels: ['up'], cpuDirections: ['up'] });
+    await expect(
+      h.game.startMatch({ firstAttacker: 'player-first', targetScore: 2 as 1 }),
+    ).rejects.toThrow('targetScore');
   });
 });
