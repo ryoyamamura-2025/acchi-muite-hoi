@@ -69,6 +69,25 @@ export class MemoryDatabase implements DatabasePort {
     for (const [key, sample] of next) this.imported.set(key, sample);
   }
 
+  async commitLocalClassSelection(
+    domain: Domain,
+    label: AnyLabel,
+    samples: readonly Sample[],
+    cacheEntries: readonly SimilarityCacheEntry[],
+  ): Promise<void> {
+    const nextLocal = new Map(this.local);
+    for (const [key, sample] of nextLocal) {
+      if (sample.domain === domain && sample.label === label) nextLocal.delete(key);
+    }
+    for (const sample of samples) {
+      nextLocal.set(makeSampleKey(sample.sourceInstallationId, sample.id), cloneSample(sample));
+    }
+
+    this.local.clear();
+    for (const [key, sample] of nextLocal) this.local.set(key, sample);
+    this.similarityCache.set(cacheKey(domain, label), structuredClone([...cacheEntries]));
+  }
+
   async getActiveIndex(): Promise<ActiveIndex | undefined> {
     return this.activeIndex ? structuredClone(this.activeIndex) : undefined;
   }
