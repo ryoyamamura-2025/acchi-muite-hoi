@@ -13,6 +13,11 @@ export interface ValidationPrediction {
   confidences: Readonly<Partial<Record<AnyLabel, number>>>;
 }
 
+export interface ValidationTrialResult extends ValidationSessionRecord {
+  /** UI向け。永続化せずpredictedLabelの有無から返す。 */
+  decided: boolean;
+}
+
 export interface ValidationServiceDeps<TSource> {
   store: ValidationStore;
   getModelSnapshot(): ValidationModelSnapshot;
@@ -38,7 +43,7 @@ export class ValidationService<TSource> {
     domain: Domain,
     expectedLabel: AnyLabel,
     source: TSource,
-  ): Promise<ValidationSessionRecord> {
+  ): Promise<ValidationTrialResult> {
     if (!isDomainLabel(domain, expectedLabel)) {
       throw new Error(`expectedLabel ${expectedLabel} is invalid for ${domain}`);
     }
@@ -85,7 +90,7 @@ export class ValidationService<TSource> {
     };
     validateRecord(record);
     await this.deps.store.put(record);
-    return structuredClone(record);
+    return { ...structuredClone(record), decided: predictedLabel !== null };
   }
 
   async listTrials(): Promise<ValidationSessionRecord[]> {
