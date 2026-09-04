@@ -36,10 +36,6 @@ export class DatasetRepository {
     await this.db.putSamples(STORE_NAMES.localSamples, samples);
   }
 
-  /**
-   * 学習session後の1 class全体とsimilarity cacheを同一transactionで確定する。
-   * selectorによる上限削除もこの置換に含め、中途半端な保存状態を残さない。
-   */
   async commitLocalClassSelection(
     domain: Domain,
     label: AnyLabel,
@@ -68,16 +64,17 @@ export class DatasetRepository {
     await this.db.putSamples(STORE_NAMES.importedSamples, samples);
   }
 
-  /** Phase 5のsame-source再Importで使用するatomic replacement。 */
+  /** 同一source由来Importedを丸ごと置換する。revision指定時は同一transactionで更新する。 */
   async replaceImportedSource(
     sourceInstallationId: string,
     samples: readonly Sample[],
+    nextDataRevision?: number,
   ): Promise<void> {
     assertSamples(samples);
     if (samples.some((sample) => sample.sourceInstallationId !== sourceInstallationId)) {
       throw new Error('置換対象と異なるsourceInstallationIdのsampleが含まれています');
     }
-    await this.db.replaceImportedSource(sourceInstallationId, samples);
+    await this.db.replaceImportedSource(sourceInstallationId, samples, nextDataRevision);
   }
 
   async clearLocalDataset(): Promise<void> {
