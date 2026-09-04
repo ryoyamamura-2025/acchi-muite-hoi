@@ -1,0 +1,514 @@
+:root {
+  --bg: #0f1420;
+  --panel: #1a2131;
+  --panel-2: #222c40;
+  --text: #e8edf7;
+  --muted: #93a1bd;
+  --accent: #ffc55c;
+  --accent-2: #58d1a4;
+  --danger: #ff7a7a;
+  --border: #2e3a52;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 24px 20px 48px;
+  background: radial-gradient(120% 90% at 50% 0%, #1b2436 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Hiragino Kaku Gothic ProN',
+    'Noto Sans JP',
+    sans-serif;
+  line-height: 1.6;
+}
+
+.app-header {
+  max-width: 1120px;
+  margin: 0 auto 20px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.7rem;
+  letter-spacing: 0.02em;
+}
+
+.tagline {
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status {
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.error {
+  max-width: 1120px;
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  background: rgba(255, 122, 122, 0.12);
+  color: #ffd7d7;
+}
+
+.layout {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.panel-title {
+  margin: 16px 0 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ---------- カメラ ---------- */
+
+.video-wrap {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+#video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 鏡表示。featureExtractor 側でも左右反転しているので「右」の意味が一致する。 */
+  transform: scaleX(-1);
+}
+
+.memory {
+  margin-top: 10px;
+  font-size: 0.72rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 認識結果バー ---------- */
+
+.bars {
+  display: grid;
+  gap: 6px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 5.5em 1fr 3em;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.bar-row.is-top {
+  background: rgba(255, 197, 92, 0.14);
+}
+
+.bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width 0.12s linear;
+}
+
+.bar-value {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- タブ ---------- */
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.tab {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.tab.is-active {
+  border-color: var(--accent);
+  background: rgba(255, 197, 92, 0.14);
+  color: var(--text);
+}
+
+/* ---------- キャラクター ---------- */
+
+.stage {
+  position: relative;
+  height: 220px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #202b3f, #18202f);
+  overflow: hidden;
+}
+
+.chara {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 130px;
+  height: 130px;
+  transition: transform 0.18s ease-out;
+}
+
+.chara svg {
+  width: 100%;
+  height: 100%;
+}
+
+.head {
+  fill: #ffd9a0;
+  stroke: #e0a866;
+  stroke-width: 3;
+}
+
+.eye {
+  fill: #33405c;
+}
+
+.mouth {
+  fill: none;
+  stroke: #33405c;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.face {
+  transition: transform 0.18s ease-out;
+}
+
+.stage[data-facing='up'] .chara {
+  transform: translateY(-26px);
+}
+.stage[data-facing='down'] .chara {
+  transform: translateY(26px);
+}
+.stage[data-facing='left'] .chara {
+  transform: translateX(-46px);
+}
+.stage[data-facing='right'] .chara {
+  transform: translateX(46px);
+}
+
+.stage[data-facing='up'] .face {
+  transform: translateY(-7px);
+}
+.stage[data-facing='down'] .face {
+  transform: translateY(7px);
+}
+.stage[data-facing='left'] .face {
+  transform: translateX(-10px);
+}
+.stage[data-facing='right'] .face {
+  transform: translateX(10px);
+}
+
+.stage[data-mood='win'] .mouth {
+  d: path('M45 76 Q60 92 75 76');
+  stroke: var(--accent-2);
+}
+.stage[data-mood='lose'] .mouth {
+  d: path('M45 86 Q60 72 75 86');
+  stroke: var(--danger);
+}
+
+.stage-arrow {
+  position: absolute;
+  color: var(--border);
+  font-size: 1.4rem;
+  transition:
+    color 0.15s,
+    transform 0.15s;
+}
+
+.stage-arrow.is-active {
+  color: var(--accent);
+  transform: scale(1.5);
+}
+
+.stage-arrow--up {
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+}
+.stage-arrow--down {
+  bottom: 8px;
+  left: 50%;
+  translate: -50% 0;
+}
+.stage-arrow--left {
+  left: 10px;
+  top: 50%;
+  translate: 0 -50%;
+}
+.stage-arrow--right {
+  right: 10px;
+  top: 50%;
+  translate: 0 -50%;
+}
+
+.stage-badge {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #241a05;
+  font-weight: 700;
+}
+
+.stage-caption {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ---------- 学習パネル ---------- */
+
+.mode-lead {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.train-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.train-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.train-card.is-capturing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(255, 197, 92, 0.3);
+}
+
+.train-card.is-insufficient .train-count {
+  color: var(--danger);
+}
+
+.train-title {
+  font-weight: 700;
+}
+
+.train-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  min-height: 2.4em;
+}
+
+.train-count {
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.train-button {
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: #33415c;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.train-button:active {
+  background: var(--accent);
+  color: #241a05;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--danger);
+}
+
+.practice-result {
+  font-size: 2rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+/* ---------- ゲームパネル ---------- */
+
+.game-panel {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+}
+
+.game-notice {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: rgba(255, 197, 92, 0.1);
+  font-size: 0.82rem;
+}
+
+.game-score {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-attacker {
+  font-size: 0.85rem;
+  color: var(--accent);
+  min-height: 1.4em;
+}
+
+.game-message {
+  min-height: 1.6em;
+  font-size: 0.95rem;
+}
+
+.game-reveal {
+  display: flex;
+  gap: 18px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 0.9rem;
+}
+
+.janken-row {
+  display: flex;
+  gap: 10px;
+}
+
+.janken-button {
+  display: grid;
+  gap: 2px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.janken-button:hover {
+  border-color: var(--accent);
+}
+
+.janken-icon {
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.primary-button {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #241a05;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.save-state {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
