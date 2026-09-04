@@ -3,10 +3,17 @@ import * as knnClassifier from '@tensorflow-models/knn-classifier';
 import {
   CLASS_LABELS,
   ClassLabel,
+  FACE_LABELS,
+  FaceLabel,
   MIN_SAMPLES_PER_CLASS,
+  POINTER_LABELS,
+  PointerLabel,
   emptyConfidences,
   isClassLabel,
+  isFaceLabel,
+  isPointerLabel,
 } from './labels';
+import type { Sample } from './types';
 
 export interface Prediction {
   label: ClassLabel;
@@ -15,20 +22,130 @@ export interface Prediction {
 
 export type SampleCounts = Record<ClassLabel, number>;
 
-/** 近傍数。KNN 側で `min(k, サンプル総数)` にクランプされるので少数サンプルでも安全。 */
-const K = 5;
+export interface DomainPrediction<L extends string> {
+  label: L;
+  confidences: Record<L, number>;
+}
+
+export type PointerPrediction = DomainPrediction<PointerLabel>;
+export type FacePrediction = DomainPrediction<FaceLabel>;
+export type PointerSampleCounts = Record<PointerLabel, number>;
+export type FaceSampleCounts = Record<FaceLabel, number>;
+
+export interface DomainClassifier<L extends string> {
+  rebuild(samples: readonly Sample[]): void;
+  predict(feature: tf.Tensor2D): Promise<DomainPrediction<L> | null>;
+  counts(): Record<L, number>;
+  total(): number;
+  dispose(): void;
+}
+
+const DEFAULT_K = 5;
+
+class KnnDomainClassifier<L extends string> implements DomainClassifier<L> {
+  private knn = knnClassifier.create();
+
+  constructor(
+    private readonly domain: 'pointer' | 'face',
+    private readonly labels: readonly L[],
+    private readonly isLabel: (value: string) => value is L,
+    private readonly featureDim: number,
+    private readonly k = DEFAULT_K,
+  ) {
+    if (!Number.isInteger(featureDim) || featureDim <= 0) {
+      throw new Error(`invalid featureDim: ${featureDim}`);
+    }
+    if (!Number.isInteger(k) || k <= 0) throw new Error(`invalid k: ${k}`);
+  }
+
+  rebuild(samples: readonly Sample[]): void {
+    const next = knnClassifier.create();
+    try {
+      for (const sample of samples) {
+        if (sample.domain !== this.domain || !this.isLabel(sample.label)) {
+          throw new Error(
+            `classifierへ異なるdomain/labelのsampleが渡されました: expected ${this.domain}, actual ${sample.domain}/${sample.label}`,
+          );
+        }
+        if (sample.feature.length !== this.featureDim) {
+          throw new Error(
+            `featureDim mismatch: expected ${this.featureDim}, actual ${sample.feature.length}`,
+          );
+        }
+
+        const tensor = tf.tensor2d(sample.feature, [1, this.featureDim]);
+        try {
+          next.addExample(tensor, sample.label);
+        } finally {
+          tensor.dispose();
+        }
+      }
+    } catch (error) {
+      next.dispose();
+      throw error;
+    }
+
+    this.knn.dispose();
+    this.knn = next;
+  }
+
+  async predict(feature: tf.Tensor2D): Promise<DomainPrediction<L> | null> {
+    if (this.total() === 0) return null;
+    if (feature.shape.length !== 2 || feature.shape[0] !== 1 || feature.shape[1] !== this.featureDim) {
+      throw new Error(
+        `prediction feature shape mismatch: expected [1, ${this.featureDim}], actual [${feature.shape.join(', ')}]`,
+      );
+    }
+
+    const result = await this.knn.predictClass(feature, this.k);
+    if (!this.isLabel(result.label)) return null;
+
+    const confidences = this.emptyCounts();
+    for (const [label, value] of Object.entries(result.confidences)) {
+      if (this.isLabel(label)) confidences[label] = value;
+    }
+    return { label: result.label, confidences };
+  }
+
+  counts(): Record<L, number> {
+    const raw = this.knn.getClassExampleCount();
+    const counts = this.emptyCounts();
+    for (const label of this.labels) counts[label] = raw[label] ?? 0;
+    return counts;
+  }
+
+  total(): number {
+    return Object.values(this.counts()).reduce((sum, count) => sum + count, 0);
+  }
+
+  dispose(): void {
+    this.knn.dispose();
+  }
+
+  private emptyCounts(): Record<L, number> {
+    return Object.fromEntries(this.labels.map((label) => [label, 0])) as Record<L, number>;
+  }
+}
+
+export class PointerClassifier extends KnnDomainClassifier<PointerLabel> {
+  constructor(featureDim: number, k = DEFAULT_K) {
+    super('pointer', POINTER_LABELS, isPointerLabel, featureDim, k);
+  }
+}
+
+export class FaceClassifier extends KnnDomainClassifier<FaceLabel> {
+  constructor(featureDim: number, k = DEFAULT_K) {
+    super('face', FACE_LABELS, isFaceLabel, featureDim, k);
+  }
+}
 
 /**
- * MobileNet の特徴量に対する KNN 分類器のラッパ。
- * サンプルを足した瞬間に反映されるので「学習ボタンを押した直後に効く」体験になる。
+ * Phase 4移行中の旧Pointer-only runtime互換クラス。
+ * 新Application APIへの切替完了後に削除する。
  */
 export class PoseClassifier {
   private knn = knnClassifier.create();
 
-  /**
-   * `feature` の所有権は移らない（KNN 側は正規化したコピーを保持する）。
-   * 呼び出し側が dispose すること。
-   */
   addExample(feature: tf.Tensor2D, label: ClassLabel): void {
     this.knn.addExample(feature, label);
   }
@@ -36,7 +153,7 @@ export class PoseClassifier {
   async predict(feature: tf.Tensor2D): Promise<Prediction | null> {
     if (this.total() === 0) return null;
 
-    const result = await this.knn.predictClass(feature, K);
+    const result = await this.knn.predictClass(feature, DEFAULT_K);
     if (!isClassLabel(result.label)) return null;
 
     const confidences = emptyConfidences();
@@ -49,31 +166,25 @@ export class PoseClassifier {
   counts(): SampleCounts {
     const raw = this.knn.getClassExampleCount();
     const counts = { up: 0, right: 0, down: 0, left: 0, neutral: 0 } satisfies SampleCounts;
-    for (const label of CLASS_LABELS) {
-      counts[label] = raw[label] ?? 0;
-    }
+    for (const label of CLASS_LABELS) counts[label] = raw[label] ?? 0;
     return counts;
   }
 
   total(): number {
-    // KNN の getNumExamples() は private なのでクラス別カウントから求める。
     return Object.values(this.counts()).reduce((sum, count) => sum + count, 0);
   }
 
-  /** 全クラスが最低サンプル数に達しているか。ゲーム開始の条件。 */
   isReady(): boolean {
     const counts = this.counts();
     return CLASS_LABELS.every((label) => counts[label] >= MIN_SAMPLES_PER_CLASS);
   }
 
-  /** 足りていないクラスの一覧（UI の警告用）。 */
   missingClasses(): ClassLabel[] {
     const counts = this.counts();
     return CLASS_LABELS.filter((label) => counts[label] < MIN_SAMPLES_PER_CLASS);
   }
 
   clearClass(label: ClassLabel): void {
-    // 未知ラベルを渡すと KNN 側が throw するのでガードする。
     if (this.counts()[label] > 0) this.knn.clearClass(label);
   }
 
@@ -81,12 +192,10 @@ export class PoseClassifier {
     this.knn.clearAllClasses();
   }
 
-  /** 保存用。返り値のテンソルは KNN が保持しているものなので dispose してはいけない。 */
   exportDataset(): Record<string, tf.Tensor2D> {
     return this.knn.getClassifierDataset();
   }
 
-  /** 復元用。渡したテンソルの所有権は KNN に移る。 */
   importDataset(dataset: Record<string, tf.Tensor2D>): void {
     this.knn.setClassifierDataset(dataset);
   }
