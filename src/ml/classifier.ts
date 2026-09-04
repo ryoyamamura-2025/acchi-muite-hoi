@@ -1,5 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import * as knnClassifier from '@tensorflow-models/knn-classifier';
+import { DEFAULT_RUNTIME_TUNING } from '../config/tuning';
 import {
   CLASS_LABELS,
   ClassLabel,
@@ -44,8 +45,16 @@ export interface ClassifierConfig {
 }
 
 export const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {
-  pointer: { k: 5, confidenceThreshold: 0.6, minValidRatio: 0.5 },
-  face: { k: 5, confidenceThreshold: 0.6, minValidRatio: 0.5 },
+  pointer: {
+    k: DEFAULT_RUNTIME_TUNING.pointer.k,
+    confidenceThreshold: DEFAULT_RUNTIME_TUNING.pointer.confidenceThreshold,
+    minValidRatio: DEFAULT_RUNTIME_TUNING.pointer.minValidRatio,
+  },
+  face: {
+    k: DEFAULT_RUNTIME_TUNING.face.k,
+    confidenceThreshold: DEFAULT_RUNTIME_TUNING.face.confidenceThreshold,
+    minValidRatio: DEFAULT_RUNTIME_TUNING.face.minValidRatio,
+  },
 };
 
 export interface DomainClassifier<L extends string> {

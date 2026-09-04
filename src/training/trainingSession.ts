@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME_TUNING } from '../config/tuning';
 import { DatasetRepository } from '../data/datasetRepository';
 import { SimilarityCacheRepository } from '../data/similarityCache';
 import type { AnyLabel, Domain } from '../ml/labels';
@@ -31,22 +32,18 @@ export interface TrainingStatus {
 }
 
 export interface TrainingSessionConfig {
-  /** 1回の学習session全体。 */
   durationMs: number;
-  /** 特徴量候補を作る間隔。 */
   candidateIntervalMs: number;
-  /** 開始直後を候補から外す時間。 */
   stableLeadInMs: number;
-  /** 終了直前を候補から外す時間。 */
   stableLeadOutMs: number;
   selector: SampleSelectorConfig;
 }
 
 export const DEFAULT_TRAINING_SESSION_CONFIG: TrainingSessionConfig = {
-  durationMs: 3000,
-  candidateIntervalMs: 300,
-  stableLeadInMs: 600,
-  stableLeadOutMs: 600,
+  durationMs: DEFAULT_RUNTIME_TUNING.training.durationMs,
+  candidateIntervalMs: DEFAULT_RUNTIME_TUNING.training.candidateIntervalMs,
+  stableLeadInMs: DEFAULT_RUNTIME_TUNING.training.stableLeadInMs,
+  stableLeadOutMs: DEFAULT_RUNTIME_TUNING.training.stableLeadOutMs,
   selector: DEFAULT_SAMPLE_SELECTOR_CONFIG,
 };
 
@@ -54,11 +51,8 @@ export interface TrainingSessionDeps {
   datasetRepository: DatasetRepository;
   similarityCacheRepository: SimilarityCacheRepository;
   installationId: InstallationId;
-  /** 1フレームから特徴量を抽出する。返却bufferはsession側でコピーして保持する。 */
   captureFeature(signal: AbortSignal): Promise<Float32Array>;
-  /** session scheduling用の単調増加clock。既定はperformance.now()。 */
   now?: () => number;
-  /** Sample metadata用のepoch timestamp。 */
   timestamp?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   createId?: () => string;
@@ -87,10 +81,6 @@ export type TrainingSessionResult =
       error: unknown;
     };
 
-/**
- * 約3秒の学習captureを1つの論理transactionとして扱う。
- * capture中は候補をmemoryだけに保持し、終了後のselectionが完了するまでIndexedDBを更新しない。
- */
 export class TrainingSession {
   private status: TrainingStatus = idleStatus();
   private controller: AbortController | null = null;
@@ -117,10 +107,6 @@ export class TrainingSession {
     return { ...this.status };
   }
 
-  /**
-   * capture/processing中のsessionをcancelする。
-   * saving開始後はIndexedDBのatomic transactionを中断しないためcancel不可。
-   */
   cancel(): boolean {
     if (!this.controller || this.status.state === 'saving') return false;
     this.controller.abort();
@@ -180,7 +166,6 @@ export class TrainingSession {
         this.update({ candidateCount: candidates.length });
       }
 
-      // 最後の候補取得後もsession全体は約3秒を維持する。
       await this.sleepUntil(startedAt + this.config.durationMs, controller.signal);
       throwIfAborted(controller.signal);
 
