@@ -267,11 +267,13 @@ export class MatchGame {
     if (!matched) {
       const nextAttacker = oppositeSide(attacker);
       this.update({
+        phase: nextAttacker === 'player' ? 'player-attack' : 'cpu-attack',
         attacker: nextAttacker,
         defender: oppositeSide(nextAttacker),
         cpuDirection: null,
         playerDirection: null,
         result: null,
+        message: nextAttacker === 'player' ? '攻守交代。あなたが攻撃' : '攻守交代。CPUが攻撃',
       });
       return;
     }
@@ -290,6 +292,7 @@ export class MatchGame {
     const currentStarter = this.requirePointStarter();
     const nextStarter = oppositeSide(currentStarter);
     this.update({
+      phase: 'preparing',
       pointNumber: this.state.pointNumber + 1,
       pointStarter: nextStarter,
       attacker: nextStarter,
@@ -297,6 +300,7 @@ export class MatchGame {
       cpuDirection: null,
       playerDirection: null,
       result: null,
+      message: `次のポイント。${nextStarter === 'player' ? 'あなた' : 'CPU'}から攻撃`,
     });
   }
 
