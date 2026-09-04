@@ -10,6 +10,12 @@ export const META_KEYS = {
   featureDim: 'featureDim',
   sharedDataEnabled: 'sharedDataEnabled',
   settings: 'settings',
+  /** Local / Imported実データの変更世代。 */
+  dataRevision: 'dataRevision',
+  /** 現在のActive IndexがどのdataRevisionから作られたか。 */
+  activeSourceRevision: 'activeSourceRevision',
+  /** 現在のActive Indexを作ったときのShared設定。 */
+  activeSharedDataEnabled: 'activeSharedDataEnabled',
 } as const;
 
 export interface DatasetCompatibility {
@@ -27,6 +33,11 @@ export async function getOrCreateInstallationId(db: DatabasePort): Promise<Insta
   const installationId = createId();
   await db.setMeta(META_KEYS.installationId, installationId);
   return installationId;
+}
+
+export async function getDataRevision(db: DatabasePort): Promise<number> {
+  const value = await db.getMeta<number>(META_KEYS.dataRevision);
+  return Number.isInteger(value) && (value ?? -1) >= 0 ? (value as number) : 0;
 }
 
 /**
@@ -50,7 +61,12 @@ export async function ensureDatasetCompatibility(
     extractorName === expected.extractorName &&
     featureDim === expected.featureDim;
 
-  if (compatible) return 'compatible';
+  if (compatible) {
+    if ((await db.getMeta<number>(META_KEYS.dataRevision)) === undefined) {
+      await db.setMeta(META_KEYS.dataRevision, 0);
+    }
+    return 'compatible';
+  }
 
   if (hasAnyCompatibilityMeta) await db.clearDatasetState();
 
@@ -58,6 +74,9 @@ export async function ensureDatasetCompatibility(
     db.setMeta(META_KEYS.datasetVersion, expected.datasetVersion),
     db.setMeta(META_KEYS.extractorName, expected.extractorName),
     db.setMeta(META_KEYS.featureDim, expected.featureDim),
+    db.setMeta(META_KEYS.dataRevision, 0),
+    db.deleteMeta(META_KEYS.activeSourceRevision),
+    db.deleteMeta(META_KEYS.activeSharedDataEnabled),
   ]);
 
   return hasAnyCompatibilityMeta ? 'reset' : 'initialized';
