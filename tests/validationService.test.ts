@@ -10,10 +10,9 @@ import { MemoryValidationStore } from './helpers/memoryValidationStore';
 function harness(options: {
   snapshot?: ValidationModelSnapshot;
   prediction?: ValidationPrediction | null;
-  afterPrediction?: () => void;
 }) {
   const store = new MemoryValidationStore();
-  let snapshot: ValidationModelSnapshot = options.snapshot ?? {
+  const snapshot: ValidationModelSnapshot = options.snapshot ?? {
     state: 'ready',
     sharedDataEnabled: false,
     activeDatasetRevision: 7,
@@ -22,22 +21,12 @@ function harness(options: {
   const service = new ValidationService<string>({
     store,
     getModelSnapshot: () => ({ ...snapshot }),
-    predict: async (_domain: Domain, _source: string) => {
-      const result = options.prediction ?? null;
-      options.afterPrediction?.();
-      return result;
-    },
+    predict: async (_domain: Domain, _source: string) => options.prediction ?? null,
     now: () => 123456789,
     createId: () => 'validation-1',
   });
 
-  return {
-    service,
-    store,
-    setSnapshot(next: Partial<ValidationModelSnapshot>) {
-      snapshot = { ...snapshot, ...next };
-    },
-  };
+  return { service, store };
 }
 
 function prediction(label: AnyLabel, confidence: number): ValidationPrediction {
@@ -48,9 +37,9 @@ describe('ValidationService', () => {
   it('意図的なPointer試行だけを必要フィールド付きで保存する', async () => {
     const h = harness({ prediction: prediction('right', 0.82) });
 
-    const record = await h.service.runTrial('pointer', 'right', 'frame');
+    const result = await h.service.runTrial('pointer', 'right', 'frame');
 
-    expect(record).toEqual({
+    expect(result).toEqual({
       validationSessionId: 'validation-1',
       timestamp: 123456789,
       sharedDataEnabled: false,
@@ -59,8 +48,20 @@ describe('ValidationService', () => {
       predictedLabel: 'right',
       confidence: 0.82,
       activeDatasetRevision: 7,
+      decided: true,
     });
-    expect(await h.service.listTrials()).toEqual([record]);
+    expect(await h.service.listTrials()).toEqual([
+      {
+        validationSessionId: 'validation-1',
+        timestamp: 123456789,
+        sharedDataEnabled: false,
+        domain: 'pointer',
+        expectedLabel: 'right',
+        predictedLabel: 'right',
+        confidence: 0.82,
+        activeDatasetRevision: 7,
+      },
+    ]);
   });
 
   it('Face試行ではfrontを正解・予測ラベルとして記録できる', async () => {
@@ -69,25 +70,27 @@ describe('ValidationService', () => {
       prediction: prediction('front', 0.91),
     });
 
-    const record = await h.service.runTrial('face', 'front', 'frame');
+    const result = await h.service.runTrial('face', 'front', 'frame');
 
-    expect(record).toMatchObject({
+    expect(result).toMatchObject({
       sharedDataEnabled: true,
       domain: 'face',
       expectedLabel: 'front',
       predictedLabel: 'front',
       confidence: 0.91,
       activeDatasetRevision: 12,
+      decided: true,
     });
   });
 
-  it('予測不能も試行としてpredictedLabel/confidenceをnullで保存する', async () => {
+  it('予測不能も試行としてpredictedLabel/confidenceをnullで保存しdecided=falseを返す', async () => {
     const h = harness({ prediction: null });
 
-    const record = await h.service.runTrial('pointer', 'neutral', 'frame');
+    const result = await h.service.runTrial('pointer', 'neutral', 'frame');
 
-    expect(record.predictedLabel).toBeNull();
-    expect(record.confidence).toBeNull();
+    expect(result.predictedLabel).toBeNull();
+    expect(result.confidence).toBeNull();
+    expect(result.decided).toBe(false);
     expect(await h.service.listTrials()).toHaveLength(1);
   });
 
@@ -106,27 +109,22 @@ describe('ValidationService', () => {
   });
 
   it('推論中にShared設定が変わった試行は保存しない', async () => {
-    const h = harness({ prediction: prediction('up', 0.8) });
-    const originalRunTrial = h.service.runTrial.bind(h.service);
-
-    const changing = new ValidationService<string>({
-      store: h.store,
-      getModelSnapshot: (() => {
-        let reads = 0;
-        return () => ({
-          state: 'ready',
-          sharedDataEnabled: reads++ === 0 ? false : true,
-          activeDatasetRevision: 7,
-        });
-      })(),
+    const store = new MemoryValidationStore();
+    let reads = 0;
+    const service = new ValidationService<string>({
+      store,
+      getModelSnapshot: () => ({
+        state: 'ready',
+        sharedDataEnabled: reads++ === 0 ? false : true,
+        activeDatasetRevision: 7,
+      }),
       predict: async () => prediction('up', 0.8),
       now: () => 1,
       createId: () => 'changed-shared',
     });
 
-    void originalRunTrial;
-    await expect(changing.runTrial('pointer', 'up', 'frame')).rejects.toThrow('Active Dataset条件');
-    expect(await h.store.list()).toEqual([]);
+    await expect(service.runTrial('pointer', 'up', 'frame')).rejects.toThrow('Active Dataset条件');
+    expect(await store.list()).toEqual([]);
   });
 
   it('推論中にActive revisionが変わった試行は保存しない', async () => {
