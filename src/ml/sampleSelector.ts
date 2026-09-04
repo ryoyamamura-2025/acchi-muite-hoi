@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME_TUNING } from '../config/tuning';
 import type { AnyLabel, Domain } from './labels';
 import { isDomainLabel } from './labels';
 import type { Sample, SampleKey } from './types';
@@ -20,29 +21,24 @@ export interface SampleSelectorConfig {
 }
 
 export const DEFAULT_SAMPLE_SELECTOR_CONFIG: SampleSelectorConfig = {
-  pointer: { similarityThreshold: 0.98, maxSamplesPerClass: 100 },
-  face: { similarityThreshold: 0.98, maxSamplesPerClass: 100 },
+  pointer: {
+    similarityThreshold: DEFAULT_RUNTIME_TUNING.pointer.similarityThreshold,
+    maxSamplesPerClass: 100,
+  },
+  face: {
+    similarityThreshold: DEFAULT_RUNTIME_TUNING.face.similarityThreshold,
+    maxSamplesPerClass: 100,
+  },
 };
 
 export interface SampleSelectionResult {
-  /** 選別後に残すべきclass全体。 */
   samples: Sample[];
-  /** 今回の候補のうち最終的に残ったsample。 */
   acceptedCandidates: Sample[];
-  /** similarity threshold以上のため破棄した候補。 */
   duplicateCandidates: Sample[];
-  /** 100件上限維持のため削除対象になったsample。 */
   evictedSamples: Sample[];
-  /** 選別後のclass内pair cache。破損・欠損時は再計算して補完する。 */
   cacheEntries: SimilarityCacheEntry[];
 }
 
-/**
- * 同一domain / labelの既存sampleと新規候補を、多様性を保ちながら最大件数へ収める。
- *
- * 通常経路では新規sample × 既存sampleだけsimilarityを計算する。上限超過時に
- * 最類似pairを探すため既存pair cacheが欠損していた場合のみ、欠損pairを再計算する。
- */
 export function selectRepresentativeSamples(
   existingSamples: readonly Sample[],
   candidates: readonly Sample[],
@@ -191,7 +187,6 @@ function mostSimilarPair(
 
 function olderSample(a: Sample, b: Sample): Sample {
   if (a.capturedAt !== b.capturedAt) return a.capturedAt < b.capturedAt ? a : b;
-  // capturedAtが同一でも結果が実行環境依存にならないようsample keyで固定する。
   return sampleKey(a) < sampleKey(b) ? a : b;
 }
 
