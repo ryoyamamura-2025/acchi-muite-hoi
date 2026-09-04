@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME_TUNING } from '../config/tuning';
 import { DEFAULT_CLASSIFIER_CONFIG } from '../ml/classifier';
 import type { Domain, Direction } from '../ml/labels';
 import { judgeDirection, type JudgeOptions, type JudgeSample } from './judge';
@@ -22,7 +23,6 @@ export type {
   UndecidedReason,
 } from './types';
 
-// Current pre-Phase-6 UI still imports these names. The adapter contains no janken win/lose decision.
 export {
   Game,
   HAND_META,
@@ -33,10 +33,8 @@ export {
 } from './legacyStateMachine';
 
 export interface MatchGameDeps {
-  /** attacker=playerならpointer、attacker=cpuならfaceの推論結果を500ms窓で集める。 */
   collect(domain: Domain, durationMs: number): Promise<JudgeSample[]>;
   sleep(ms: number): Promise<void>;
-  /** CPUがこの手で出す方向。chant開始時に1回だけ決める。 */
   randomDirection(): Direction;
 }
 
@@ -58,22 +56,12 @@ export const DEFAULT_GAME_TIMING: GameTiming = {
   preparingMs: 500,
   attackReadyMs: 500,
   chantMs: 900,
-  captureMs: 500,
+  captureMs: DEFAULT_RUNTIME_TUNING.game.judgeWindowMs,
   resultMs: 1400,
 };
 
-/** UIが選べる勝利条件。 */
 export const TARGET_SCORES: readonly TargetScore[] = [1, 3];
 
-/**
- * じゃんけんを持たない「あっち向いてホイ」state machine。
- *
- * - 対戦開始時に先攻と1点/3点を受け取る
- * - 外れた手では得点せず攻守だけ交代する
- * - 一致した手の攻撃側が1点取る
- * - 得点後、次ポイントの開始攻撃側は直前ポイントの開始側から必ず反転する
- * - undecidedは得点/攻守を一切変えず同じ手を再試行する
- */
 export class MatchGame {
   private state: CoreGameState = initialState();
   private running = false;
@@ -122,7 +110,6 @@ export class MatchGame {
     this.reset();
   }
 
-  /** 1試合を開始し、勝者が決まるまでstateを自動進行する。 */
   async startMatch(options: MatchOptions): Promise<void> {
     if (this.running) throw new Error('match is already running');
     assertMatchOptions(options);
@@ -191,7 +178,6 @@ export class MatchGame {
     await this.deps.sleep(this.timing.attackReadyMs);
     if (!this.isCurrentRun(token)) return;
 
-    // CPU方向はユーザー推論より前、chant開始時に固定する。
     const pendingCpuDirection = this.deps.randomDirection();
     this.update({
       phase: 'chant',
@@ -372,9 +358,7 @@ function assertTiming(timing: GameTiming): void {
   for (const [key, value] of Object.entries(timing)) {
     if (!Number.isFinite(value) || value < 0) throw new Error(`invalid game timing: ${key}`);
   }
-  if (timing.captureMs !== 500) {
-    throw new Error('captureMs is fixed at 500ms by backend specification');
-  }
+  if (timing.captureMs <= 0) throw new Error('captureMs must be > 0');
 }
 
 function winnerFor(score: Record<Side, number>, targetScore: TargetScore): Side | null {
