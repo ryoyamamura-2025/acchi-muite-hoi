@@ -4,7 +4,7 @@ import type { UndecidedReason } from './types';
 /** Pointer / Faceどちらでも使える1フレーム分の推論結果。 */
 export interface JudgeSample {
   label: AnyLabel;
-  confidences: Readonly<Record<string, number>>;
+  confidences: Readonly<Partial<Record<AnyLabel, number>>>;
 }
 
 export interface JudgeOptions {
