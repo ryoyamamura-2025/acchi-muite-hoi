@@ -4,7 +4,7 @@ import { judgeDirection, type JudgeOptions, type JudgeSample } from './judge';
 import {
   oppositeSide,
   sideFromFirstAttacker,
-  type GameState,
+  type GameState as CoreGameState,
   type MatchOptions,
   type Side,
   type TargetScore,
@@ -13,7 +13,7 @@ import {
 export type {
   FirstAttacker,
   GamePhase,
-  GameState,
+  GameState as MatchGameState,
   HandOutcome,
   HandResultView,
   MatchOptions,
@@ -22,7 +22,17 @@ export type {
   UndecidedReason,
 } from './types';
 
-export interface GameDeps {
+// Current pre-Phase-6 UI still imports these names. The adapter contains no janken win/lose decision.
+export {
+  Game,
+  HAND_META,
+  TARGET_SCORE,
+  randomHand,
+  type GameState,
+  type Hand,
+} from './legacyStateMachine';
+
+export interface MatchGameDeps {
   /** attacker=playerならpointer、attacker=cpuならfaceの推論結果を500ms窓で集める。 */
   collect(domain: Domain, durationMs: number): Promise<JudgeSample[]>;
   sleep(ms: number): Promise<void>;
@@ -38,7 +48,7 @@ export interface GameTiming {
   resultMs: number;
 }
 
-export interface GameConfig {
+export interface MatchGameConfig {
   timing?: Partial<GameTiming>;
   pointerJudge?: JudgeOptions;
   faceJudge?: JudgeOptions;
@@ -64,8 +74,8 @@ export const TARGET_SCORES: readonly TargetScore[] = [1, 3];
  * - 得点後、次ポイントの開始攻撃側は直前ポイントの開始側から必ず反転する
  * - undecidedは得点/攻守を一切変えず同じ手を再試行する
  */
-export class Game {
-  private state: GameState = initialState();
+export class MatchGame {
+  private state: CoreGameState = initialState();
   private running = false;
   private runToken = 0;
   private readonly timing: GameTiming;
@@ -73,9 +83,9 @@ export class Game {
   private readonly faceJudge: Required<JudgeOptions>;
 
   constructor(
-    private readonly deps: GameDeps,
-    private readonly onChange: (state: GameState) => void,
-    config: GameConfig = {},
+    private readonly deps: MatchGameDeps,
+    private readonly onChange: (state: CoreGameState) => void,
+    config: MatchGameConfig = {},
   ) {
     this.timing = { ...DEFAULT_GAME_TIMING, ...config.timing };
     assertTiming(this.timing);
@@ -93,7 +103,7 @@ export class Game {
     };
   }
 
-  getState(): GameState {
+  getState(): CoreGameState {
     return cloneState(this.state);
   }
 
@@ -112,10 +122,7 @@ export class Game {
     this.reset();
   }
 
-  /**
-   * 1試合を開始し、勝者が決まるまでstateを自動進行する。
-   * UIはonChangeで状態を描画するだけでよい。
-   */
+  /** 1試合を開始し、勝者が決まるまでstateを自動進行する。 */
   async startMatch(options: MatchOptions): Promise<void> {
     if (this.running) throw new Error('match is already running');
     assertMatchOptions(options);
@@ -225,7 +232,6 @@ export class Game {
         message: undecidedMessage(judged.reason),
       });
       await this.deps.sleep(this.timing.resultMs);
-      // attacker / defender / pointStarter / scoreは変更しない。
       return;
     }
 
@@ -281,7 +287,6 @@ export class Game {
       return;
     }
 
-    // 1ポイントが決着。次ポイントの開始攻撃側は「直前のpointStarter」の反対。
     const currentStarter = this.requirePointStarter();
     const nextStarter = oppositeSide(currentStarter);
     this.update({
@@ -314,7 +319,7 @@ export class Game {
     return this.running && this.runToken === token;
   }
 
-  private update(patch: Partial<GameState>): void {
+  private update(patch: Partial<CoreGameState>): void {
     this.state = { ...this.state, ...patch };
     this.emit();
   }
@@ -324,7 +329,7 @@ export class Game {
   }
 }
 
-function initialState(): GameState {
+function initialState(): CoreGameState {
   return {
     phase: 'idle',
     score: { player: 0, cpu: 0 },
@@ -342,7 +347,7 @@ function initialState(): GameState {
   };
 }
 
-function cloneState(state: GameState): GameState {
+function cloneState(state: CoreGameState): CoreGameState {
   return {
     ...state,
     score: { ...state.score },
