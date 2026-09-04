@@ -97,7 +97,7 @@ export function readStoredZip(bytes: Uint8Array): Map<string, Uint8Array> {
 
   while (offset + 4 <= bytes.byteLength) {
     const signature = readUint32(bytes, offset);
-    if (signature === CENTRAL_DIRECTORY_HEADER || signature === END_OF_CENTRAL_DIRECTORY) break;
+    if (signature === CENTRAL_DIRECTORY_HEADER) break;
     if (signature !== LOCAL_FILE_HEADER) throw new ZipFormatError('invalid ZIP local header');
     if (offset + 30 > bytes.byteLength) throw new ZipFormatError('truncated ZIP local header');
 
@@ -132,6 +132,7 @@ export function readStoredZip(bytes: Uint8Array): Map<string, Uint8Array> {
   }
 
   if (files.size === 0) throw new ZipFormatError('ZIP contains no readable files');
+  validateCentralDirectory(bytes, offset, files, decoder);
   return files;
 }
 
@@ -139,6 +140,69 @@ export function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const value of bytes) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ value) & 0xff];
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function validateCentralDirectory(
+  bytes: Uint8Array,
+  centralOffset: number,
+  files: ReadonlyMap<string, Uint8Array>,
+  decoder: TextDecoder,
+): void {
+  let offset = centralOffset;
+  const centralNames: string[] = [];
+
+  for (let i = 0; i < files.size; i += 1) {
+    if (offset + 46 > bytes.byteLength || readUint32(bytes, offset) !== CENTRAL_DIRECTORY_HEADER) {
+      throw new ZipFormatError('invalid ZIP central directory');
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 46);
+    const flags = view.getUint16(8, true);
+    const method = view.getUint16(10, true);
+    const compressedSize = view.getUint32(20, true);
+    const uncompressedSize = view.getUint32(24, true);
+    const nameLength = view.getUint16(28, true);
+    const extraLength = view.getUint16(30, true);
+    const commentLength = view.getUint16(32, true);
+    const nameStart = offset + 46;
+    const next = nameStart + nameLength + extraLength + commentLength;
+    if (next > bytes.byteLength) throw new ZipFormatError('truncated ZIP central directory');
+    if (flags !== 0 || method !== STORED_METHOD || compressedSize !== uncompressedSize) {
+      throw new ZipFormatError('unsupported ZIP central directory entry');
+    }
+
+    const name = decoder.decode(bytes.subarray(nameStart, nameStart + nameLength));
+    validateName(name);
+    const localData = files.get(name);
+    if (!localData || localData.byteLength !== uncompressedSize) {
+      throw new ZipFormatError(`ZIP central directory mismatch: ${name}`);
+    }
+    centralNames.push(name);
+    offset = next;
+  }
+
+  assertUniqueNames(centralNames);
+  if (offset + 22 !== bytes.byteLength || readUint32(bytes, offset) !== END_OF_CENTRAL_DIRECTORY) {
+    throw new ZipFormatError('invalid ZIP end record');
+  }
+  const end = new DataView(bytes.buffer, bytes.byteOffset + offset, 22);
+  const disk = end.getUint16(4, true);
+  const startDisk = end.getUint16(6, true);
+  const entriesOnDisk = end.getUint16(8, true);
+  const totalEntries = end.getUint16(10, true);
+  const centralSize = end.getUint32(12, true);
+  const declaredCentralOffset = end.getUint32(16, true);
+  const commentLength = end.getUint16(20, true);
+  if (
+    disk !== 0 ||
+    startDisk !== 0 ||
+    entriesOnDisk !== files.size ||
+    totalEntries !== files.size ||
+    centralSize !== offset - centralOffset ||
+    declaredCentralOffset !== centralOffset ||
+    commentLength !== 0
+  ) {
+    throw new ZipFormatError('ZIP end record mismatch');
+  }
 }
 
 function validateName(name: string): void {
