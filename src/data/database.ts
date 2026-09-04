@@ -34,6 +34,13 @@ export interface DatabasePort {
   putSamples(store: SampleStoreName, samples: readonly Sample[]): Promise<void>;
   clearSampleStore(store: SampleStoreName): Promise<void>;
   replaceImportedSource(sourceInstallationId: string, samples: readonly Sample[]): Promise<void>;
+  /** Localの1 classと対応するsimilarity cacheを同一transactionで置換する。 */
+  commitLocalClassSelection(
+    domain: Domain,
+    label: AnyLabel,
+    samples: readonly Sample[],
+    cacheEntries: readonly SimilarityCacheEntry[],
+  ): Promise<void>;
 
   getActiveIndex(): Promise<ActiveIndex | undefined>;
   setActiveIndex(index: ActiveIndex): Promise<void>;
@@ -158,6 +165,39 @@ class IndexedDbDatabase implements DatabasePort {
           return;
         }
         for (const sample of samples) store.put(sample);
+      };
+
+      await transactionDone(tx);
+    });
+  }
+
+  async commitLocalClassSelection(
+    domain: Domain,
+    label: AnyLabel,
+    samples: readonly Sample[],
+    cacheEntries: readonly SimilarityCacheEntry[],
+  ): Promise<void> {
+    await this.withDatabase(async (db) => {
+      const tx = db.transaction(
+        [STORE_NAMES.localSamples, STORE_NAMES.similarityCache],
+        'readwrite',
+      );
+      const sampleStore = tx.objectStore(STORE_NAMES.localSamples);
+      const cacheStore = tx.objectStore(STORE_NAMES.similarityCache);
+      const cursorRequest = sampleStore
+        .index(INDEX_DOMAIN_LABEL)
+        .openKeyCursor(IDBKeyRange.only([domain, label]));
+
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) {
+          sampleStore.delete(cursor.primaryKey);
+          cursor.continue();
+          return;
+        }
+
+        for (const sample of samples) sampleStore.put(sample);
+        cacheStore.put([...cacheEntries], similarityCacheKey(domain, label));
       };
 
       await transactionDone(tx);
