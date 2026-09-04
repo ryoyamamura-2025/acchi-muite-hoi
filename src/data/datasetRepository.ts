@@ -1,5 +1,6 @@
 import type { AnyLabel, Domain } from '../ml/labels';
 import { isDomainLabel } from '../ml/labels';
+import type { SimilarityCacheEntry } from '../ml/similarity';
 import type { Sample } from '../ml/types';
 import type { DatabasePort } from './database';
 import { STORE_NAMES } from './database';
@@ -33,6 +34,33 @@ export class DatasetRepository {
       }
     }
     await this.db.putSamples(STORE_NAMES.localSamples, samples);
+  }
+
+  /**
+   * 学習session後の1 class全体とsimilarity cacheを同一transactionで確定する。
+   * selectorによる上限削除もこの置換に含め、中途半端な保存状態を残さない。
+   */
+  async commitLocalClassSelection(
+    domain: Domain,
+    label: AnyLabel,
+    samples: readonly Sample[],
+    cacheEntries: readonly SimilarityCacheEntry[],
+    installationId: string,
+  ): Promise<void> {
+    if (!isDomainLabel(domain, label)) {
+      throw new Error(`domainとlabelが一致しません: ${domain}/${label}`);
+    }
+    assertSamples(samples);
+    for (const sample of samples) {
+      if (sample.domain !== domain || sample.label !== label) {
+        throw new Error('Local class selectionに異なるclassのsampleが含まれています');
+      }
+      if (sample.sourceInstallationId !== installationId) {
+        throw new Error('Local sampleのsourceInstallationIdが現在のinstallationIdと一致しません');
+      }
+    }
+    assertCacheEntries(cacheEntries);
+    await this.db.commitLocalClassSelection(domain, label, samples, cacheEntries);
   }
 
   async commitImportedSamples(samples: readonly Sample[]): Promise<void> {
@@ -74,6 +102,22 @@ function assertSamples(samples: readonly Sample[]): void {
     }
     if (!Number.isFinite(sample.capturedAt)) {
       throw new Error('capturedAtが不正です');
+    }
+  }
+}
+
+function assertCacheEntries(entries: readonly SimilarityCacheEntry[]): void {
+  for (const entry of entries) {
+    if (
+      !entry.pairKey ||
+      !entry.firstSampleKey ||
+      !entry.secondSampleKey ||
+      entry.firstSampleKey === entry.secondSampleKey ||
+      !Number.isFinite(entry.similarity) ||
+      entry.similarity < -1 ||
+      entry.similarity > 1
+    ) {
+      throw new Error('invalid similarity cache entry');
     }
   }
 }
