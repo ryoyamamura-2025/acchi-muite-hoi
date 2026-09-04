@@ -1,276 +1,404 @@
-import { Direction } from '../ml/labels';
-import { JudgeSample, judgeDirection } from './judge';
+import { DEFAULT_CLASSIFIER_CONFIG } from '../ml/classifier';
+import type { Domain, Direction } from '../ml/labels';
+import { judgeDirection, type JudgeOptions, type JudgeSample } from './judge';
+import {
+  oppositeSide,
+  sideFromFirstAttacker,
+  type GameState as CoreGameState,
+  type MatchOptions,
+  type Side,
+  type TargetScore,
+} from './types';
 
-export type Hand = 'rock' | 'scissors' | 'paper';
-export type Side = 'player' | 'cpu';
+export type {
+  FirstAttacker,
+  GamePhase,
+  GameState as MatchGameState,
+  HandOutcome,
+  HandResultView,
+  MatchOptions,
+  Side,
+  TargetScore,
+  UndecidedReason,
+} from './types';
 
-export type Phase =
-  | 'idle'
-  | 'janken'
-  | 'janken-reveal'
-  | 'countdown'
-  | 'capture'
-  | 'reveal'
-  | 'match-over';
+// Current pre-Phase-6 UI still imports these names. The adapter contains no janken win/lose decision.
+export {
+  Game,
+  HAND_META,
+  TARGET_SCORE,
+  randomHand,
+  type GameState,
+  type Hand,
+} from './legacyStateMachine';
 
-export type RoundOutcome = 'player-point' | 'cpu-point' | 'dodge' | 'undecided';
-
-export interface JankenView {
-  player: Hand;
-  cpu: Hand;
-  outcome: 'win' | 'lose' | 'draw';
-}
-
-export interface RoundView {
-  /** プレイヤーが出した方向。攻めなら「指さした方向」、守りなら「顔を向けた方向」。 */
-  playerDirection: Direction | null;
-  /** CPU が出した方向。キャプチャ開始時に決まっていて、公開は reveal 時。 */
-  cpuDirection: Direction | null;
-  outcome: RoundOutcome;
-}
-
-export interface GameState {
-  phase: Phase;
-  score: Record<Side, number>;
-  attacker: Side | null;
-  janken: JankenView | null;
-  round: RoundView | null;
-  /** 「あっち向いて…」「ほい！」の掛け声。 */
-  chant: string | null;
-  message: string;
-  winner: Side | null;
-}
-
-export interface GameDeps {
-  /** 指定時間のあいだ推論結果を集める。 */
-  collect(durationMs: number): Promise<JudgeSample[]>;
+export interface MatchGameDeps {
+  /** attacker=playerならpointer、attacker=cpuならfaceの推論結果を500ms窓で集める。 */
+  collect(domain: Domain, durationMs: number): Promise<JudgeSample[]>;
   sleep(ms: number): Promise<void>;
+  /** CPUがこの手で出す方向。chant開始時に1回だけ決める。 */
   randomDirection(): Direction;
-  randomHand(): Hand;
 }
 
-export const TARGET_SCORE = 3;
-const CHANT_MS = 900;
-const CAPTURE_MS = 500;
-const REVEAL_MS = 1900;
-const JANKEN_REVEAL_MS = 1200;
-/** 判定できないラウンドを繰り返す上限。これを超えたらじゃんけんに戻す。 */
-const MAX_UNDECIDED_RETRIES = 3;
+export interface GameTiming {
+  preparingMs: number;
+  attackReadyMs: number;
+  chantMs: number;
+  captureMs: number;
+  resultMs: number;
+}
 
-const HANDS: readonly Hand[] = ['rock', 'scissors', 'paper'];
-/** じゃんけんの勝ち関係（キーが値に勝つ）。 */
-const BEATS: Record<Hand, Hand> = { rock: 'scissors', scissors: 'paper', paper: 'rock' };
+export interface MatchGameConfig {
+  timing?: Partial<GameTiming>;
+  pointerJudge?: JudgeOptions;
+  faceJudge?: JudgeOptions;
+}
 
-export const HAND_META: Record<Hand, { ja: string; icon: string }> = {
-  rock: { ja: 'グー', icon: '✊' },
-  scissors: { ja: 'チョキ', icon: '✌️' },
-  paper: { ja: 'パー', icon: '🖐️' },
+export const DEFAULT_GAME_TIMING: GameTiming = {
+  preparingMs: 500,
+  attackReadyMs: 500,
+  chantMs: 900,
+  captureMs: 500,
+  resultMs: 1400,
 };
 
-export function randomHand(): Hand {
-  return HANDS[Math.floor(Math.random() * HANDS.length)];
-}
-
-export function judgeJanken(player: Hand, cpu: Hand): JankenView['outcome'] {
-  if (player === cpu) return 'draw';
-  return BEATS[player] === cpu ? 'win' : 'lose';
-}
+/** UIが選べる勝利条件。 */
+export const TARGET_SCORES: readonly TargetScore[] = [1, 3];
 
 /**
- * 「あっち向いてほい」の進行役。
+ * じゃんけんを持たない「あっち向いてホイ」state machine。
  *
- * じゃんけん → 攻守決定 → 掛け声 → 「ほい！」で画像認識 → 判定 を繰り返し、
- * どちらかが {@link TARGET_SCORE} 点先取したら終わり。
- *
- * 初版ではプレイヤーは常に「指さし」で方向を示す（攻守は役割だけ入れ替わる）。
- * 顔の向き自体を認識させるには別クラスの学習が必要なため。
+ * - 対戦開始時に先攻と1点/3点を受け取る
+ * - 外れた手では得点せず攻守だけ交代する
+ * - 一致した手の攻撃側が1点取る
+ * - 得点後、次ポイントの開始攻撃側は直前ポイントの開始側から必ず反転する
+ * - undecidedは得点/攻守を一切変えず同じ手を再試行する
  */
-export class Game {
-  private state: GameState = initialState();
-  private busy = false;
+export class MatchGame {
+  private state: CoreGameState = initialState();
+  private running = false;
+  private runToken = 0;
+  private readonly timing: GameTiming;
+  private readonly pointerJudge: Required<JudgeOptions>;
+  private readonly faceJudge: Required<JudgeOptions>;
 
   constructor(
-    private readonly deps: GameDeps,
-    private readonly onChange: (state: GameState) => void,
-  ) {}
+    private readonly deps: MatchGameDeps,
+    private readonly onChange: (state: CoreGameState) => void,
+    config: MatchGameConfig = {},
+  ) {
+    this.timing = { ...DEFAULT_GAME_TIMING, ...config.timing };
+    assertTiming(this.timing);
+    this.pointerJudge = {
+      minConfidence:
+        config.pointerJudge?.minConfidence ?? DEFAULT_CLASSIFIER_CONFIG.pointer.confidenceThreshold,
+      minValidRatio:
+        config.pointerJudge?.minValidRatio ?? DEFAULT_CLASSIFIER_CONFIG.pointer.minValidRatio,
+    };
+    this.faceJudge = {
+      minConfidence:
+        config.faceJudge?.minConfidence ?? DEFAULT_CLASSIFIER_CONFIG.face.confidenceThreshold,
+      minValidRatio:
+        config.faceJudge?.minValidRatio ?? DEFAULT_CLASSIFIER_CONFIG.face.minValidRatio,
+    };
+  }
 
-  getState(): GameState {
-    return this.state;
+  getState(): CoreGameState {
+    return cloneState(this.state);
+  }
+
+  isRunning(): boolean {
+    return this.running;
   }
 
   reset(): void {
-    this.busy = false;
+    this.runToken += 1;
+    this.running = false;
     this.state = initialState();
     this.emit();
   }
 
-  start(): void {
-    this.busy = false;
-    this.state = { ...initialState(), phase: 'janken', message: 'じゃんけんで攻める人を決めよう！' };
-    this.emit();
+  cancel(): void {
+    this.reset();
   }
 
-  /** じゃんけんの手を出す。UI のボタンから呼ばれる。 */
-  async playHand(hand: Hand): Promise<void> {
-    if (this.state.phase !== 'janken' || this.busy) return;
-    this.busy = true;
-    try {
-      const cpu = this.deps.randomHand();
-      const outcome = judgeJanken(hand, cpu);
-      this.update({
-        phase: 'janken-reveal',
-        janken: { player: hand, cpu, outcome },
-        round: null,
-        message:
-          outcome === 'draw'
-            ? 'あいこ！ もう一回'
-            : outcome === 'win'
-              ? 'じゃんけんに勝った！ あなたが指さす番'
-              : 'じゃんけんに負けた… CPU が指さす番',
-      });
-      await this.deps.sleep(JANKEN_REVEAL_MS);
+  /** 1試合を開始し、勝者が決まるまでstateを自動進行する。 */
+  async startMatch(options: MatchOptions): Promise<void> {
+    if (this.running) throw new Error('match is already running');
+    assertMatchOptions(options);
 
-      if (outcome === 'draw') {
-        this.update({ phase: 'janken', message: 'あいこ！ もう一度じゃんけん' });
-        return;
-      }
-
-      this.update({ attacker: outcome === 'win' ? 'player' : 'cpu' });
-      await this.runRounds();
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  /**
-   * 判定できなかった場合は同じ攻守でやり直す。
-   * ただしカメラが止まっているときに永久に回らないよう回数を制限する。
-   */
-  private async runRounds(): Promise<void> {
-    for (let attempt = 0; attempt <= MAX_UNDECIDED_RETRIES; attempt++) {
-      const outcome = await this.runRound();
-      if (outcome !== 'undecided') return;
-    }
-    this.update({
-      phase: 'janken',
-      attacker: null,
+    const first = sideFromFirstAttacker(options.firstAttacker);
+    const token = ++this.runToken;
+    this.running = true;
+    this.state = {
+      phase: 'preparing',
+      score: { player: 0, cpu: 0 },
+      targetScore: options.targetScore,
+      attacker: first,
+      defender: oppositeSide(first),
+      pointStarter: first,
+      pointNumber: 1,
+      cpuDirection: null,
+      playerDirection: null,
+      result: null,
       chant: null,
-      round: null,
-      message: '判定できませんでした。カメラの前で大きく指さして、じゃんけんからやり直してください',
-    });
+      message: '対戦準備中…',
+      winner: null,
+    };
+    this.emit();
+
+    try {
+      await this.deps.sleep(this.timing.preparingMs);
+      while (this.isCurrentRun(token) && this.state.winner === null) {
+        await this.runHand(token);
+      }
+    } catch (error) {
+      if (this.isCurrentRun(token)) {
+        this.state = {
+          ...this.state,
+          phase: 'idle',
+          chant: null,
+          cpuDirection: null,
+          playerDirection: null,
+          result: null,
+          message: 'ゲーム処理でエラーが発生しました',
+        };
+        this.emit();
+      }
+      throw error;
+    } finally {
+      if (this.runToken === token) this.running = false;
+    }
   }
 
-  private async runRound(): Promise<RoundOutcome> {
-    const attacker = this.state.attacker;
-    if (!attacker) return 'undecided';
+  private async runHand(token: number): Promise<void> {
+    const attacker = this.requireAttacker();
+    const domain: Domain = attacker === 'player' ? 'pointer' : 'face';
+    const judgeOptions = domain === 'pointer' ? this.pointerJudge : this.faceJudge;
 
     this.update({
-      phase: 'countdown',
-      chant: 'あっち向いて…',
-      round: null,
+      phase: attacker === 'player' ? 'player-attack' : 'cpu-attack',
+      defender: oppositeSide(attacker),
+      cpuDirection: null,
+      playerDirection: null,
+      result: null,
+      chant: null,
       message:
         attacker === 'player'
-          ? '「ほい！」で指さす方向を出して'
-          : '「ほい！」で顔を向ける方向を出して',
+          ? 'あなたが攻撃。指さす方向を決めてください'
+          : 'CPUが攻撃。顔を向ける準備をしてください',
     });
-    await this.deps.sleep(CHANT_MS);
+    await this.deps.sleep(this.timing.attackReadyMs);
+    if (!this.isCurrentRun(token)) return;
 
-    // CPU の方向はキャプチャ開始時に決めておく（プレイヤーの結果に依存させない）。
-    const cpuDirection = this.deps.randomDirection();
+    // CPU方向はユーザー推論より前、chant開始時に固定する。
+    const pendingCpuDirection = this.deps.randomDirection();
+    this.update({
+      phase: 'chant',
+      chant: 'あっち向いて…',
+      cpuDirection: null,
+      playerDirection: null,
+      result: null,
+      message: attacker === 'player' ? '指さす準備！' : '顔を向ける準備！',
+    });
+    await this.deps.sleep(this.timing.chantMs);
+    if (!this.isCurrentRun(token)) return;
 
-    this.update({ phase: 'capture', chant: 'ほい！' });
-    const samples = await this.deps.collect(CAPTURE_MS);
-    const judged = judgeDirection(samples);
+    this.update({
+      phase: 'judging',
+      chant: 'ほい！',
+      cpuDirection: null,
+      playerDirection: null,
+      result: null,
+      message: '判定中…',
+    });
+    const samples = await this.deps.collect(domain, this.timing.captureMs);
+    if (!this.isCurrentRun(token)) return;
 
+    const judged = judgeDirection(samples, judgeOptions);
     if (judged.kind === 'undecided') {
       this.update({
-        phase: 'reveal',
+        phase: 'retry',
         chant: null,
-        round: { playerDirection: null, cpuDirection: null, outcome: 'undecided' },
+        cpuDirection: null,
+        playerDirection: null,
+        result: {
+          playerDirection: null,
+          cpuDirection: null,
+          outcome: 'undecided',
+          confidence: null,
+          undecidedReason: judged.reason,
+        },
         message: undecidedMessage(judged.reason),
       });
-      await this.deps.sleep(REVEAL_MS);
-      return 'undecided';
+      await this.deps.sleep(this.timing.resultMs);
+      return;
     }
 
     const playerDirection = judged.direction;
-    const matched = playerDirection === cpuDirection;
-    const outcome: RoundOutcome = matched
+    const matched = playerDirection === pendingCpuDirection;
+    const outcome = matched
       ? attacker === 'player'
         ? 'player-point'
         : 'cpu-point'
-      : 'dodge';
-
+      : 'miss';
     const score = { ...this.state.score };
     if (outcome === 'player-point') score.player += 1;
     if (outcome === 'cpu-point') score.cpu += 1;
 
     this.update({
-      phase: 'reveal',
-      chant: null,
+      phase: 'result',
       score,
-      round: { playerDirection, cpuDirection, outcome },
-      message: roundMessage(outcome, attacker),
+      chant: null,
+      cpuDirection: pendingCpuDirection,
+      playerDirection,
+      result: {
+        playerDirection,
+        cpuDirection: pendingCpuDirection,
+        outcome,
+        confidence: judged.confidence,
+        undecidedReason: null,
+      },
+      message: resultMessage(outcome, attacker),
     });
-    await this.deps.sleep(REVEAL_MS);
+    await this.deps.sleep(this.timing.resultMs);
+    if (!this.isCurrentRun(token)) return;
 
-    if (score.player >= TARGET_SCORE || score.cpu >= TARGET_SCORE) {
-      const winner: Side = score.player >= TARGET_SCORE ? 'player' : 'cpu';
+    if (!matched) {
+      const nextAttacker = oppositeSide(attacker);
+      this.update({
+        phase: nextAttacker === 'player' ? 'player-attack' : 'cpu-attack',
+        attacker: nextAttacker,
+        defender: oppositeSide(nextAttacker),
+        cpuDirection: null,
+        playerDirection: null,
+        result: null,
+        message: nextAttacker === 'player' ? '攻守交代。あなたが攻撃' : '攻守交代。CPUが攻撃',
+      });
+      return;
+    }
+
+    const winner = winnerFor(score, this.requireTargetScore());
+    if (winner) {
       this.update({
         phase: 'match-over',
         winner,
-        message: winner === 'player' ? 'あなたの勝ち！ 🎉' : 'CPU の勝ち… もう一回？',
+        chant: null,
+        message: winner === 'player' ? 'あなたの勝ち！ 🎉' : 'CPUの勝ち！',
       });
-      return outcome;
+      return;
     }
 
-    this.update({ phase: 'janken', attacker: null, message: '次のじゃんけん！' });
-    return outcome;
+    const currentStarter = this.requirePointStarter();
+    const nextStarter = oppositeSide(currentStarter);
+    this.update({
+      phase: 'preparing',
+      pointNumber: this.state.pointNumber + 1,
+      pointStarter: nextStarter,
+      attacker: nextStarter,
+      defender: oppositeSide(nextStarter),
+      cpuDirection: null,
+      playerDirection: null,
+      result: null,
+      message: `次のポイント。${nextStarter === 'player' ? 'あなた' : 'CPU'}から攻撃`,
+    });
   }
 
-  private update(patch: Partial<GameState>): void {
+  private requireAttacker(): Side {
+    if (!this.state.attacker) throw new Error('attacker is not initialized');
+    return this.state.attacker;
+  }
+
+  private requirePointStarter(): Side {
+    if (!this.state.pointStarter) throw new Error('pointStarter is not initialized');
+    return this.state.pointStarter;
+  }
+
+  private requireTargetScore(): TargetScore {
+    if (!this.state.targetScore) throw new Error('targetScore is not initialized');
+    return this.state.targetScore;
+  }
+
+  private isCurrentRun(token: number): boolean {
+    return this.running && this.runToken === token;
+  }
+
+  private update(patch: Partial<CoreGameState>): void {
     this.state = { ...this.state, ...patch };
     this.emit();
   }
 
   private emit(): void {
-    this.onChange(this.state);
+    this.onChange(cloneState(this.state));
   }
 }
 
-function initialState(): GameState {
+function initialState(): CoreGameState {
   return {
     phase: 'idle',
     score: { player: 0, cpu: 0 },
+    targetScore: null,
     attacker: null,
-    janken: null,
-    round: null,
+    defender: null,
+    pointStarter: null,
+    pointNumber: 0,
+    cpuDirection: null,
+    playerDirection: null,
+    result: null,
     chant: null,
     message: '',
     winner: null,
   };
 }
 
-function undecidedMessage(reason: 'no-samples' | 'too-few-valid' | 'low-confidence'): string {
-  switch (reason) {
-    case 'no-samples':
-      return '映像を取得できませんでした。もう一度';
-    case 'too-few-valid':
-      return 'どの方向か分かりませんでした（はっきり指さして！）';
-    case 'low-confidence':
-      return '自信のある判定ができませんでした。もう一度';
+function cloneState(state: CoreGameState): CoreGameState {
+  return {
+    ...state,
+    score: { ...state.score },
+    result: state.result ? { ...state.result } : null,
+  };
+}
+
+function assertMatchOptions(options: MatchOptions): void {
+  if (options.firstAttacker !== 'player-first' && options.firstAttacker !== 'cpu-first') {
+    throw new Error('firstAttacker must be player-first or cpu-first');
+  }
+  if (options.targetScore !== 1 && options.targetScore !== 3) {
+    throw new Error('targetScore must be 1 or 3');
   }
 }
 
-function roundMessage(outcome: RoundOutcome, attacker: Side): string {
-  switch (outcome) {
-    case 'player-point':
-      return '当たり！ あなたのポイント 🎯';
-    case 'cpu-point':
-      return '同じ方向を向いてしまった… CPU のポイント';
-    case 'dodge':
-      return attacker === 'player' ? 'かわされた！ 惜しい' : 'かわした！ セーフ 😌';
-    case 'undecided':
-      return '判定できませんでした';
+function assertTiming(timing: GameTiming): void {
+  for (const [key, value] of Object.entries(timing)) {
+    if (!Number.isFinite(value) || value < 0) throw new Error(`invalid game timing: ${key}`);
   }
+  if (timing.captureMs !== 500) {
+    throw new Error('captureMs is fixed at 500ms by backend specification');
+  }
+}
+
+function winnerFor(score: Record<Side, number>, targetScore: TargetScore): Side | null {
+  if (score.player >= targetScore) return 'player';
+  if (score.cpu >= targetScore) return 'cpu';
+  return null;
+}
+
+function undecidedMessage(reason: 'no-samples' | 'too-few-valid' | 'low-confidence'): string {
+  switch (reason) {
+    case 'no-samples':
+      return '映像を取得できませんでした。同じ手をもう一度';
+    case 'too-few-valid':
+      return '方向を決められませんでした。同じ攻守でもう一度';
+    case 'low-confidence':
+      return '判定の確信度が足りません。同じ攻守でもう一度';
+  }
+}
+
+function resultMessage(
+  outcome: 'player-point' | 'cpu-point' | 'miss',
+  attacker: Side,
+): string {
+  if (outcome === 'player-point') return '方向一致！ あなたのポイント 🎯';
+  if (outcome === 'cpu-point') return '方向一致！ CPUのポイント';
+  return attacker === 'player' ? 'かわされた！ 攻守交代' : 'かわした！ 攻守交代';
 }
