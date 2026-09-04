@@ -126,7 +126,12 @@ export class ModelService {
         try {
           await this.rebuildClassifiersFromIndex(index);
           this.activeIndex = index;
-          this.setStatus({ state: 'ready', errorMessage: null });
+          this.setStatus({
+            state: 'ready',
+            sharedDataEnabled: this.sharedDataEnabled,
+            activeDatasetRevision: index.revision,
+            errorMessage: null,
+          });
           return;
         } catch {
           // 壊れた/欠損したActive参照は元Datasetから再生成する。
