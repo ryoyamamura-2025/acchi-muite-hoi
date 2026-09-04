@@ -32,6 +32,22 @@ export type FacePrediction = DomainPrediction<FaceLabel>;
 export type PointerSampleCounts = Record<PointerLabel, number>;
 export type FaceSampleCounts = Record<FaceLabel, number>;
 
+export interface DomainClassifierSettings {
+  k: number;
+  confidenceThreshold: number;
+  minValidRatio: number;
+}
+
+export interface ClassifierConfig {
+  pointer: DomainClassifierSettings;
+  face: DomainClassifierSettings;
+}
+
+export const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {
+  pointer: { k: 5, confidenceThreshold: 0.6, minValidRatio: 0.5 },
+  face: { k: 5, confidenceThreshold: 0.6, minValidRatio: 0.5 },
+};
+
 export interface DomainClassifier<L extends string> {
   rebuild(samples: readonly Sample[]): void;
   predict(feature: tf.Tensor2D): Promise<DomainPrediction<L> | null>;
@@ -39,8 +55,6 @@ export interface DomainClassifier<L extends string> {
   total(): number;
   dispose(): void;
 }
-
-const DEFAULT_K = 5;
 
 class KnnDomainClassifier<L extends string> implements DomainClassifier<L> {
   private knn = knnClassifier.create();
@@ -50,7 +64,7 @@ class KnnDomainClassifier<L extends string> implements DomainClassifier<L> {
     private readonly labels: readonly L[],
     private readonly isLabel: (value: string) => value is L,
     private readonly featureDim: number,
-    private readonly k = DEFAULT_K,
+    private readonly k: number,
   ) {
     if (!Number.isInteger(featureDim) || featureDim <= 0) {
       throw new Error(`invalid featureDim: ${featureDim}`);
@@ -128,13 +142,13 @@ class KnnDomainClassifier<L extends string> implements DomainClassifier<L> {
 }
 
 export class PointerClassifier extends KnnDomainClassifier<PointerLabel> {
-  constructor(featureDim: number, k = DEFAULT_K) {
+  constructor(featureDim: number, k = DEFAULT_CLASSIFIER_CONFIG.pointer.k) {
     super('pointer', POINTER_LABELS, isPointerLabel, featureDim, k);
   }
 }
 
 export class FaceClassifier extends KnnDomainClassifier<FaceLabel> {
-  constructor(featureDim: number, k = DEFAULT_K) {
+  constructor(featureDim: number, k = DEFAULT_CLASSIFIER_CONFIG.face.k) {
     super('face', FACE_LABELS, isFaceLabel, featureDim, k);
   }
 }
@@ -153,7 +167,7 @@ export class PoseClassifier {
   async predict(feature: tf.Tensor2D): Promise<Prediction | null> {
     if (this.total() === 0) return null;
 
-    const result = await this.knn.predictClass(feature, DEFAULT_K);
+    const result = await this.knn.predictClass(feature, DEFAULT_CLASSIFIER_CONFIG.pointer.k);
     if (!isClassLabel(result.label)) return null;
 
     const confidences = emptyConfidences();
