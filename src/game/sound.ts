@@ -10,7 +10,7 @@ export type GameSoundCue =
   | 'lose';
 
 export interface GameSoundPort {
-  unlock(): void;
+  unlock(): Promise<void>;
   play(cue: GameSoundCue): void;
 }
 
@@ -25,13 +25,17 @@ type WebkitAudioWindow = Window & {
 export function createBrowserGameSound(): GameSoundPort {
   let context: AudioContext | null = null;
 
-  const unlock = (): void => {
+  const unlock = async (): Promise<void> => {
     const AudioContextConstructor = getAudioContextConstructor();
     if (!AudioContextConstructor) return;
 
     context ??= new AudioContextConstructor();
-    if (context.state === 'suspended') {
-      void context.resume().catch(() => undefined);
+    if (context.state === 'running' || context.state === 'closed') return;
+
+    try {
+      await context.resume();
+    } catch {
+      // 音は補助演出なので、再生できない端末でもゲーム自体は継続する。
     }
   };
 
