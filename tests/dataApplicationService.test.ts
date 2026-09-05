@@ -3,7 +3,10 @@ import {
   DataApplicationService,
   type DatasetModelController,
 } from '../src/app/dataApplicationService';
-import { createEmptyActiveIndex } from '../src/data/activeDataset';
+import {
+  createEmptyActiveIndex,
+  type MissingTrainingClasses,
+} from '../src/data/activeDataset';
 import { DatasetRepository } from '../src/data/datasetRepository';
 import type { ModelServiceStatus } from '../src/app/modelService';
 import type { ActiveIndex, Sample } from '../src/ml/types';
@@ -45,10 +48,10 @@ class FakeModel implements DatasetModelController {
     return structuredClone(this.active);
   }
 
-  getMissingTrainingClasses() {
+  getMissingTrainingClasses(): MissingTrainingClasses {
     return {
-      pointer: ['right', 'down', 'left', 'neutral'] as const,
-      face: ['up', 'right', 'down', 'left', 'front'] as const,
+      pointer: ['right', 'down', 'left', 'neutral'],
+      face: ['up', 'right', 'down', 'left', 'front'],
     };
   }
 
