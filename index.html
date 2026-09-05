@@ -2,64 +2,13 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>あっち向いてほい — オンデバイス学習</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#fff8ed" />
+    <meta name="color-scheme" content="light" />
+    <title>あっち向いてホイ！</title>
   </head>
   <body>
-    <header class="app-header">
-      <h1>あっち向いてほい 🤖</h1>
-      <p class="tagline">
-        ブラウザの中だけで学習する画像分類。カメラ映像はどこにも送信されません。
-      </p>
-      <div id="status" class="status">読み込み中…</div>
-    </header>
-
-    <p id="error" class="error" hidden></p>
-
-    <main class="layout">
-      <section class="panel camera-col">
-        <div class="video-wrap">
-          <video id="video" playsinline muted></video>
-        </div>
-        <h2 class="panel-title">いまの認識結果</h2>
-        <div id="bars"></div>
-        <div id="memory" class="memory"></div>
-      </section>
-
-      <section class="panel play-col">
-        <nav class="tabs" id="tabs">
-          <button type="button" class="tab is-active" data-mode="train">① おしえる</button>
-          <button type="button" class="tab" data-mode="practice">② ためす</button>
-          <button type="button" class="tab" data-mode="game">③ たたかう</button>
-        </nav>
-
-        <div id="stage"></div>
-
-        <div id="trainPanel" class="mode-panel">
-          <p class="mode-lead">
-            それぞれのボタンを<strong>押しっぱなし</strong>にして、その方向を指さしているところを撮ってください。
-            各クラス 20〜40 枚が目安です。「待機」も必ず撮ってください（これが無いと常にどれかの方向に誤認識します）。
-          </p>
-          <div id="trainGrid"></div>
-        </div>
-
-        <div id="practicePanel" class="mode-panel" hidden>
-          <p class="mode-lead">
-            指さしてみてください。認識した方向にキャラクターが動きます。
-            うまく動かない方向があれば「① おしえる」でその方向を撮り足してください。
-          </p>
-          <div id="practiceResult" class="practice-result">—</div>
-        </div>
-
-        <div id="gamePanel" class="mode-panel" hidden></div>
-
-        <div class="footer-actions">
-          <button type="button" id="clearAll" class="link-button">学習をすべてリセット</button>
-          <span id="saveState" class="save-state"></span>
-        </div>
-      </section>
-    </main>
-
+    <div id="app" class="app-root" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
