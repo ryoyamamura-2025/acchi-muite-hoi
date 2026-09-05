@@ -55,14 +55,14 @@ Validation機能で、Pointer / Faceそれぞれ各クラス10試行以上を取
 
 初期値:
 
-- session: 3000ms
+- session: 5000ms
 - stable lead-in: 600ms
 - stable lead-out: 600ms
 - candidate interval: 300ms
 
 確認項目:
 
-- 3秒が長すぎないか
+- 5秒が長すぎないか
 - session開始直後/終了直前のブレが候補に混ざらないか
 - 1 sessionで十分な候補数が得られるか
 - 端末発熱やフレーム落ちが目立たないか

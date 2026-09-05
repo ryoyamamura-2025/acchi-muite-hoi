@@ -2,6 +2,7 @@ import { DEFAULT_RUNTIME_TUNING } from '../config/tuning';
 import { DEFAULT_CLASSIFIER_CONFIG } from '../ml/classifier';
 import type { Domain, Direction } from '../ml/labels';
 import { judgeDirection, type JudgeOptions, type JudgeSample } from './judge';
+import { createBrowserGameSound, type GameSoundPort } from './sound';
 import {
   oppositeSide,
   sideFromFirstAttacker,
@@ -36,6 +37,7 @@ export interface MatchGameDeps {
   collect(domain: Domain, durationMs: number): Promise<JudgeSample[]>;
   sleep(ms: number): Promise<void>;
   randomDirection(): Direction;
+  sound?: GameSoundPort;
 }
 
 export interface GameTiming {
@@ -53,11 +55,11 @@ export interface MatchGameConfig {
 }
 
 export const DEFAULT_GAME_TIMING: GameTiming = {
-  preparingMs: 500,
-  attackReadyMs: 500,
-  chantMs: 900,
+  preparingMs: 800,
+  attackReadyMs: 900,
+  chantMs: 1200,
   captureMs: DEFAULT_RUNTIME_TUNING.game.judgeWindowMs,
-  resultMs: 1400,
+  resultMs: 1800,
 };
 
 export const TARGET_SCORES: readonly TargetScore[] = [1, 3];
@@ -69,6 +71,7 @@ export class MatchGame {
   private readonly timing: GameTiming;
   private readonly pointerJudge: Required<JudgeOptions>;
   private readonly faceJudge: Required<JudgeOptions>;
+  private readonly sound: GameSoundPort;
 
   constructor(
     private readonly deps: MatchGameDeps,
@@ -89,6 +92,7 @@ export class MatchGame {
       minValidRatio:
         config.faceJudge?.minValidRatio ?? DEFAULT_CLASSIFIER_CONFIG.face.minValidRatio,
     };
+    this.sound = deps.sound ?? createBrowserGameSound();
   }
 
   getState(): CoreGameState {
@@ -114,6 +118,9 @@ export class MatchGame {
     if (this.running) throw new Error('match is already running');
     assertMatchOptions(options);
 
+    // startMatchはユーザー操作から同期的に呼ばれるため、ここでAudioContextを解錠する。
+    this.sound.unlock();
+
     const first = sideFromFirstAttacker(options.firstAttacker);
     const token = ++this.runToken;
     this.running = true;
@@ -133,6 +140,7 @@ export class MatchGame {
       winner: null,
     };
     this.emit();
+    this.sound.play('start');
 
     try {
       await this.deps.sleep(this.timing.preparingMs);
@@ -187,6 +195,7 @@ export class MatchGame {
       result: null,
       message: attacker === 'player' ? '指さす準備！' : '顔を向ける準備！',
     });
+    this.sound.play('chant');
     await this.deps.sleep(this.timing.chantMs);
     if (!this.isCurrentRun(token)) return;
 
@@ -198,6 +207,7 @@ export class MatchGame {
       result: null,
       message: '判定中…',
     });
+    this.sound.play('hoi');
     const samples = await this.deps.collect(domain, this.timing.captureMs);
     if (!this.isCurrentRun(token)) return;
 
@@ -217,6 +227,7 @@ export class MatchGame {
         },
         message: undecidedMessage(judged.reason),
       });
+      this.sound.play('retry');
       await this.deps.sleep(this.timing.resultMs);
       return;
     }
@@ -247,6 +258,7 @@ export class MatchGame {
       },
       message: resultMessage(outcome, attacker),
     });
+    this.sound.play(outcome);
     await this.deps.sleep(this.timing.resultMs);
     if (!this.isCurrentRun(token)) return;
 
@@ -272,6 +284,7 @@ export class MatchGame {
         chant: null,
         message: winner === 'player' ? 'あなたの勝ち！ 🎉' : 'CPUの勝ち！',
       });
+      this.sound.play(winner === 'player' ? 'win' : 'lose');
       return;
     }
 
