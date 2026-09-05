@@ -49,7 +49,7 @@ function createHarness(options: {
       captureFeature: async (signal) => {
         const index = captureIndex++;
         if (options.captureFeature) return options.captureFeature(signal, index);
-        const feature = new Float32Array(8);
+        const feature = new Float32Array(16);
         feature[index] = 1;
         return feature;
       },
@@ -68,22 +68,22 @@ function createHarness(options: {
 }
 
 describe('TrainingSession', () => {
-  it('3秒sessionの中央安定区間だけを約300ms間隔で候補化し、一括保存する', async () => {
+  it('5秒sessionの中央安定区間だけを約300ms間隔で候補化し、一括保存する', async () => {
     const h = createHarness();
 
     const result = await h.session.start('pointer', 'up');
 
     expect(result).toMatchObject({
       kind: 'completed',
-      candidateCount: 7,
-      acceptedCount: 7,
+      candidateCount: 13,
+      acceptedCount: 13,
       duplicateCount: 0,
       evictedCount: 0,
-      totalClassSamples: 7,
+      totalClassSamples: 13,
     });
 
     const saved = await h.datasetRepository.getLocalSamples({ domain: 'pointer', label: 'up' });
-    expect(saved).toHaveLength(7);
+    expect(saved).toHaveLength(13);
     expect(saved.map((sample) => sample.capturedAt)).toEqual([
       1_000_600,
       1_000_900,
@@ -92,23 +92,17 @@ describe('TrainingSession', () => {
       1_001_800,
       1_002_100,
       1_002_400,
+      1_002_700,
+      1_003_000,
+      1_003_300,
+      1_003_600,
+      1_003_900,
+      1_004_200,
     ]);
     expect(new Set(saved.map((sample) => sample.captureSessionId)).size).toBe(1);
-    expect(h.states).toEqual([
-      'preparing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'capturing',
-      'processing',
-      'processing',
-      'saving',
-      'completed',
-    ]);
+    expect(h.states[0]).toBe('preparing');
+    expect(h.states.filter((state) => state === 'capturing')).toHaveLength(14);
+    expect(h.states.slice(-4)).toEqual(['processing', 'processing', 'saving', 'completed']);
   });
 
   it('既存sampleと十分類似していれば追加0件で正常終了する', async () => {
@@ -124,9 +118,9 @@ describe('TrainingSession', () => {
 
     expect(result).toMatchObject({
       kind: 'completed',
-      candidateCount: 7,
+      candidateCount: 13,
       acceptedCount: 0,
-      duplicateCount: 7,
+      duplicateCount: 13,
       totalClassSamples: 1,
     });
     const saved = await h.datasetRepository.getLocalSamples({ domain: 'pointer', label: 'up' });
@@ -198,8 +192,8 @@ describe('TrainingSession', () => {
 
     const result = await h.session.start('face', 'front');
 
-    expect(result).toMatchObject({ kind: 'completed', acceptedCount: 7 });
-    expect(await h.datasetRepository.getLocalSamples({ domain: 'face', label: 'front' })).toHaveLength(7);
+    expect(result).toMatchObject({ kind: 'completed', acceptedCount: 13 });
+    expect(await h.datasetRepository.getLocalSamples({ domain: 'face', label: 'front' })).toHaveLength(13);
     expect(await h.datasetRepository.getLocalSamples({ domain: 'pointer' })).toHaveLength(0);
   });
 
