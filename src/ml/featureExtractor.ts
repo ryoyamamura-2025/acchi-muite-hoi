@@ -10,11 +10,11 @@ export interface FeatureExtractor {
 }
 
 /**
- * MobileNet v1 alpha=0.25 の重みは `public/models/` に同梱している。
- * tfhub.dev が廃止されたため `@tensorflow-models/mobilenet` の既定 URL は使えず、
- * ローカル同梱にすることでオフラインでも動く。
+ * MobileNet v1 alpha=0.25 は TensorFlow.js の公式配布物を明示的に利用する。
+ * tfhub.dev の既定 URL には依存せず、ブラウザ内でモデルを読み込んで推論する。
  */
-const MODEL_URL = `${import.meta.env.BASE_URL}models/mobilenet_v1_0.25_224/model.json`;
+const MODEL_URL =
+  'https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_0.25_224/model.json';
 
 /** ここで打ち切ると `[1, 7, 7, 256]`。flatten して 12544 次元の特徴量になる。 */
 const TRUNCATION_LAYER = 'conv_pw_13_relu';
