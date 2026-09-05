@@ -105,9 +105,7 @@ describe('game sound feedback', () => {
       expect(oscillatorStarts).toBe(0);
 
       releaseResume();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       expect(oscillatorStarts).toBe(2);
     } finally {
