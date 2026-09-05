@@ -42,7 +42,7 @@ export const DEFAULT_RUNTIME_TUNING: RuntimeTuningSettings = {
     similarityThreshold: 0.98,
   },
   training: {
-    durationMs: 3000,
+    durationMs: 5000,
     candidateIntervalMs: 300,
     stableLeadInMs: 600,
     stableLeadOutMs: 600,
