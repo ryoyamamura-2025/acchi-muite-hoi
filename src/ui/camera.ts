@@ -32,8 +32,27 @@ export async function startCamera(video: HTMLVideoElement): Promise<CameraHandle
     });
   }
 
+  // このアプリは画面更新時に同じ video 要素を別の cameraSlot へ付け替える。
+  // Android Chrome では DOM から一度外れた video が同じフレームのまま止まることがあるため、
+  // 再接続を検知したら明示的に play() してプレビューを継続させる。
+  let resumeQueued = false;
+  const resumeIfConnected = () => {
+    if (resumeQueued || !video.isConnected || video.srcObject !== stream) return;
+    resumeQueued = true;
+    queueMicrotask(() => {
+      resumeQueued = false;
+      if (!video.isConnected || video.srcObject !== stream) return;
+      void video.play().catch(() => {
+        // 自動再生が一時的に拒否されても、次の DOM 接続時に再試行する。
+      });
+    });
+  };
+  const observer = new MutationObserver(resumeIfConnected);
+  observer.observe(document.body, { childList: true, subtree: true });
+
   return {
     stop() {
+      observer.disconnect();
       stream.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
     },
