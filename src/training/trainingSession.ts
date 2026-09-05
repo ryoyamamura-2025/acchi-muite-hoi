@@ -163,9 +163,7 @@ export class TrainingSession {
             this.createId(),
           ),
         );
-        // candidateCount は内部状態として更新するが、候補ごとの callback は発火しない。
-        // UI が callback ごとに video 要素を再配置すると、モバイルブラウザでプレビューが止まりやすいため。
-        this.status = { ...this.status, candidateCount: candidates.length };
+        this.update({ candidateCount: candidates.length });
       }
 
       await this.sleepUntil(startedAt + this.config.durationMs, controller.signal);
