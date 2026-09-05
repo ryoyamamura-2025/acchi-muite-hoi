@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MatchGame, type MatchGameDeps } from '../src/game/stateMachine';
-import type { GameSoundCue, GameSoundPort } from '../src/game/sound';
+import {
+  createBrowserGameSound,
+  type GameSoundCue,
+  type GameSoundPort,
+} from '../src/game/sound';
 
 function confidentRightSamples() {
   return Array.from({ length: 5 }, () => ({
@@ -42,5 +46,74 @@ describe('game sound feedback', () => {
       'player-point',
       'win',
     ]);
+  });
+
+  it('AudioContext.resume完了前のSEを捨てず、runningになってから再生する', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    let releaseResume!: () => void;
+    let oscillatorStarts = 0;
+
+    class FakeAudioContext {
+      state: AudioContextState = 'suspended';
+      currentTime = 0;
+      destination = {};
+
+      resume(): Promise<void> {
+        return new Promise((resolve) => {
+          releaseResume = () => {
+            this.state = 'running';
+            resolve();
+          };
+        });
+      }
+
+      createOscillator(): OscillatorNode {
+        return {
+          type: 'sine',
+          frequency: { setValueAtTime: () => undefined },
+          connect: () => undefined,
+          start: () => {
+            oscillatorStarts += 1;
+          },
+          stop: () => undefined,
+        } as unknown as OscillatorNode;
+      }
+
+      createGain(): GainNode {
+        return {
+          gain: {
+            setValueAtTime: () => undefined,
+            exponentialRampToValueAtTime: () => undefined,
+          },
+          connect: () => undefined,
+        } as unknown as GainNode;
+      }
+    }
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        AudioContext: FakeAudioContext as unknown as typeof AudioContext,
+      },
+    });
+
+    try {
+      const sound = createBrowserGameSound();
+      sound.unlock();
+      sound.play('start');
+
+      expect(oscillatorStarts).toBe(0);
+
+      releaseResume();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(oscillatorStarts).toBe(2);
+    } finally {
+      if (originalWindow) {
+        Object.defineProperty(globalThis, 'window', originalWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, 'window');
+      }
+    }
   });
 });
