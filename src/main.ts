@@ -1128,8 +1128,6 @@ function battleHeadline(state: MatchGameState | null): string {
       return 'こうしゅ こうたい！';
     case 'match-over':
       return state.winner === 'player' ? 'かった！' : 'まけた！';
-    case 'idle':
-      return 'あっち向いて ホイ！';
   }
 }
 
